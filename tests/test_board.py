@@ -221,6 +221,8 @@ class BoardTest(unittest.TestCase):
         self.assertIn("Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the mcp__workstreams__charter tool: "
                       "load it with ToolSearch first, and never edit the charter file.", text)
         self.assertIn("When new work appears, add it as a goal with the tool. Ask before any push.", text)
+        self.assertIn("The workstream is private to this machine: never mention it, its charter, goals, record or block in anything that leaves the machine", text)
+        self.assertIn("When a sub-agent writes any of these for you, tell it the same.", text)
         self.assertIn("outside the charter's scope", text)
         self.assertIn("set a block with the tool and clear it once it clears", text); self.assertIn("with a block set, first check whether it still holds", text)
         self.assertIn("note: line is Ian's own: read it. The tool cannot change it.", text)
