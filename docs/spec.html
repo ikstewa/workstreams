@@ -745,6 +745,11 @@
             rest of the charter.
           </p>
           <p>
+            <strong>A pin, while Ian wants one.</strong> <code>pinned: true</code> keeps the workstream in the board's Pinned
+            group (§6). Ian sets and clears it with a click in the sidebar (§9) or through the board skill; nothing else writes
+            it.
+          </p>
+          <p>
             Plus a <strong>references</strong> list that accumulates on its own: tickets, epics, PRs, docs, repos.
             Tickets are references inside a workstream, not a level of it. A workstream with several deliverables
             whose tickets close at different times is the normal shape, not a signal to split.
@@ -1002,6 +1007,14 @@
             of this.
           </p>
           <p>
+            <strong>Pinned is the first group, after Control, and holds what Ian pinned.</strong> A charter with a
+            <code>pinned: true</code> line (§2), which only Ian's click or <code>board.py pin</code> sets, moves its rows from
+            the group they would otherwise be in to Pinned, sorted by key. A pinned row looks and acts as it would in that
+            group: glyph, label, colour, cap on a Blocked label, click and need. The pin is read from every charter, and it
+            moves only rows the board already shows, except that a pinned workstream never collapses into the stale line: it
+            stays visible as a dormant row.
+          </p>
+          <p>
             <strong>Blocked sits between Active and Idle, and holds only what is not Ian's move.</strong> A workstream whose
             charter carries a block (§2) shows there with its key and a dimmed label of what it waits on and for how long,
             <code>PR #12 · 2d</code>: minutes under an hour, hours under two days, days after. In the sidebar the label may take
@@ -1209,8 +1222,13 @@
             Ian's own message, and a turn that is running queues it as it would anything he typed. The text goes in as a
             bracketed paste, which a vim-mode prompt takes as text even in NORMAL mode. It is never sent while that session
             asks Ian for anything, a permission or a question, since Enter would answer the prompt; a tmux message says to
-            answer it first. Anything already typed in the prompt is sent with it. Every other row of the panel is display
-            only, and a goal's rows are not stops for the keys or items in the menu.
+            answer it first. Anything already typed in the prompt is sent with it.
+          </p>
+          <p>
+            <strong>A click on the key row pins or unpins.</strong> The panel's key row starts with <code>☆</code>, or
+            <code>★</code> when the workstream is pinned (§2), and a click on it toggles the pin. The sidebar redraws at once, as it
+            does for an open, because the watch also wakes when the charter directory changes. Every other row of the panel is
+            display only, and neither a goal's rows nor the key row are stops for the keys or items in the menu.
           </p>
           <p>
             <code>bin/ws</code> builds the <code>ws</code> session and applies every binding, and it applies them again on each

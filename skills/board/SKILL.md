@@ -15,7 +15,7 @@ uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" render --no-color
 ```
 Present it with the template below. The render decides *what* is on the board: every group, row, `note:` and `last:` line, child and the stale line it prints appears, in its order, and nothing it does not print is added. The template decides only *how* it looks. The tmux sidebar is the same board, narrow, so the two always agree.
 
-Template (groups in the render's order, Control, Active, Blocked, Idle, Unassigned, Done; omit a group the render omits; `…` repeats):
+Template (groups in the render's order, Control, Pinned, Active, Blocked, Idle, Unassigned, Done; omit a group the render omits; `…` repeats):
 ```markdown
 ## Workstream board · <weekday> <d> <Mon>, <HH:MM> <local tz>
 
@@ -56,9 +56,17 @@ Filled:
 
 _stale (38, no session in 3d): PAYMENTS_API, PROJ-31, PROJ-44, …_
 ```
-A Blocked row waits on something outside its session, such as a review or a merge, and is not Ian's move. A Done row has every goal ticked and no live session, or is a `done` workstream whose live session is neither working nor asking Ian.
+A Pinned row is a workstream Ian pinned; the row keeps the state of the group it would otherwise be in. A Blocked row waits on something outside its session, such as a review or a merge, and is not Ian's move. A Done row has every goal ticked and no live session, or is a `done` workstream whose live session is neither working nor asking Ian.
 
 The filled example truncates the stale line for space; yours never does. Grouping, liveness, labels, the goal count, the duplicate flag and the stale line are `place()` in `hooks/board.py` (spec §6; a dormant row's goal label, §2), not something to recompute here.
+
+## Pin and unpin
+
+Only when Ian asks to pin or unpin a workstream; the board never pins on its own judgment:
+```bash
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" pin <KEY>
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" unpin <KEY>
+```
 
 ## What now (interpretation)
 

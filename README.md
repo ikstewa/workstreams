@@ -4,10 +4,10 @@ A Claude Code plugin for people who run several sessions at once. It groups sess
 
 ## Key ideas
 
-- **Workstream.** A named effort that runs through many sessions. Its charter is one Markdown file: frontmatter for `workstream` (the key), `purpose`, `scope`, `focus`, `goals`, `status`, `blocked`, `blocked_since` and `note`, then a record of dated entries as the body.
+- **Workstream.** A named effort that runs through many sessions. Its charter is one Markdown file: frontmatter for `workstream` (the key), `purpose`, `scope`, `focus`, `goals`, `status`, `blocked`, `blocked_since`, `note` and `pinned`, then a record of dated entries as the body.
 - **Binding.** A session belongs to the workstream whose `workstream:` key equals the session's name. A session named `control` is the control session. A name of the form `KEY work: <task>` is a worker of `KEY`.
 - **The mod.** In a bound session it appends the charter and the newest part of the record as a conversation row at start, after `/clear` and after a compaction. It records board state from turn, ask, answer and sub-agent events. It registers the `mcp__workstreams__charter` tool, the session's only way to write its charter (focus, record entries, goals, block). It keeps the charter's goals in step with the session's task list: completing a goal's task ticks the goal.
-- **The board.** `board.py render` prints every workstream grouped as Control, Active, Blocked, Idle, Unassigned and Done, with a stale line for workstreams that have had no session for a while. `bin/ws` runs it in a tmux sidebar; the `/workstreams:board` skill prints it in a session and ranks what to do next.
+- **The board.** `board.py render` prints every workstream grouped as Control, Pinned, Active, Blocked, Idle, Unassigned and Done, with a stale line for workstreams that have had no session for a while. `bin/ws` runs it in a tmux sidebar; the `/workstreams:board` skill prints it in a session and ranks what to do next.
 
 ## Requirements
 
@@ -50,7 +50,7 @@ goals:
 - **10-02** Client library merged. Refund endpoint design agreed.
 ```
 
-Set `status: done` or `status: archived` to take a workstream off the board's active groups; an archived workstream leaves the board. Do not edit a bound session's charter by hand while the session runs; the session writes it through its charter tool. `note:` is the one field only you write, from the sidebar.
+Set `status: done` or `status: archived` to take a workstream off the board's active groups; an archived workstream leaves the board. Do not edit a bound session's charter by hand while the session runs; the session writes it through its charter tool. Only you write `note:` and `pinned:`. You set the note from the sidebar. You set the pin by clicking the ☆/★ on the key row of the sidebar's panel, or with `board.py pin <KEY>`, and a pinned workstream sits in the board's Pinned group.
 
 ### Start a bound session
 

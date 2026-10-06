@@ -1755,7 +1755,7 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(self.panel(), [
             "═" * 40,
             "",
-            "OPEN                        3 goals left",
+            "☆ OPEN                      3 goals left",
             "",
             "Ship the board, then retire the memory",
             "index it replaces.",
@@ -1764,7 +1764,7 @@ class BoardTest(unittest.TestCase):
             "☐ A goal long enough to need a second",
             "  row and then a third, which it never …",
             "☐ Third goal"])
-        head = lambda left: ["═" * 40, "", "OPEN" + " " * (36 - len(left)) + left]
+        head = lambda left: ["═" * 40, "", "☆ OPEN" + " " * (34 - len(left)) + left]
         self.assertEqual(self.panel(goals='goals:\n  - "[x] Ship"\n'), head("all done") + ["", "Ship the board, then retire the memory", "index it replaces."])
         self.assertEqual(self.panel(goals="")[:3], head("no goals"))
 
@@ -1811,7 +1811,7 @@ class BoardTest(unittest.TestCase):
         self.assertTrue(all(e["key"] == "OPEN" for e in hits.values() if "goal" in e))
         from unittest import mock
         with mock.patch.dict(os.environ, self.env):   # a step and the menu see the rows alone
-            mod = self.module(); self.assertEqual(sorted(map(int, mod.tree_rows())), sorted(n for n, e in hits.items() if "goal" not in e))
+            mod = self.module(); self.assertEqual(sorted(map(int, mod.tree_rows())), sorted(n for n, e in hits.items() if "goal" not in e and "pin" not in e))
         lines, hits = self.goal_map(height=18)   # cut on the long goal's second row, which still sends it
         self.assertEqual((lines[-1], hits[len(lines) - 1]["goal"]), ("  row and then a third, which it never …", self.LONG))
 
@@ -1840,6 +1840,40 @@ class BoardTest(unittest.TestCase):
         self.put("s-open", "OPEN", self.me(), state="waiting", waiting_for="replied")
         self.assertEqual(self.click_goal("Short goal")[-1], "send-keys|-t|%9|Enter|")
         self.assertEqual(self.click_goal("Short goal", title="agent view"), ["display-message|-l|workstreams: OPEN is no longer open|"])
+
+    def test_a_pinned_workstream_sits_above_active_in_the_look_of_its_home_group(self):
+        # Pinned, a blocked row keeps its ⏸ and block label and a stale one shows as a dormant row instead of joining the stale line.
+        self.write_charter("HELD", extra=f"blocked: PR #12\nblocked_since: {self.ago(50)}\npinned: true\n"); self.write_charter("OLD", extra="pinned: true\n")
+        self.write_charter("BUSY"); self.put("s-busy", "BUSY", self.me(), state="busy")
+        lines, wide = self.tree(40).splitlines(), self.render("--no-color")
+        self.assertEqual([l for l in lines if l.startswith("▾")], ["▾ Control", "▾ Pinned", "▾ Active"])
+        self.assertEqual(lines[lines.index("▾ Pinned") + 1:lines.index("▾ Active")], ["  ⏸ HELD" + " " * 21 + "PR #12 · 2d", "  ◌ OLD" + " " * 22 + "not started"])
+        self.assertEqual([l for l in wide.splitlines() if l in ("Pinned", "Active")], ["Pinned", "Active"])
+        self.assertEqual([self.group_of(wide, k) for k in ("HELD", "OLD", "BUSY")], ["Pinned", "Pinned", "Active"])
+        self.assertNotIn("stale (1", wide)
+        self.assertEqual(self.row_of("HELD")[1], {"key": "HELD", "session_id": None, "glyph": "⏸"})
+
+    def pin(self, *argv):
+        return subprocess.run([sys.executable, str(HOOK), *argv], capture_output=True, text=True, env=self.env)
+
+    def test_pin_and_unpin_change_only_the_pinned_line(self):
+        self.write_charter("A", extra=self.NOTE_LINE); p = self.charter_path("A"); before = p.read_text()
+        r = self.pin("pin", "A"); self.assertEqual((r.returncode, r.stdout), (0, "A pinned\n"))
+        self.assertEqual(p.read_text(), before.replace("focus: PROJ-1\n", "focus: PROJ-1\npinned: true\n"))
+        at = p.stat().st_mtime_ns; self.pin("pin", "A"); self.assertEqual(p.stat().st_mtime_ns, at)   # already pinned: not rewritten
+        r = self.pin("unpin", "A"); self.assertEqual((r.returncode, r.stdout, p.read_text()), (0, "A unpinned\n", before))
+        r = self.pin("pin", "NOPE"); self.assertEqual((r.returncode != 0, r.stdout), (True, "no charter for NOPE\n"))
+
+    def test_a_click_on_the_panels_key_row_toggles_the_pin(self):
+        from unittest import mock
+        self.put("s-open", "OPEN", self.me()); lines, hits = self.goal_map()
+        line, entry = next((n, e) for n, e in hits.items() if "pin" in e)
+        self.assertEqual((lines[int(line)][:6], entry), ("☆ OPEN", {"key": "OPEN", "pin": True}))
+        with mock.patch.dict(os.environ, self.env):   # a step and the menu see the rows alone
+            self.assertNotIn(int(line), map(int, self.module().tree_rows()))
+        self.board_py("open", str(line), "%9"); self.assertIn("\npinned: true\n", self.charter_path("OPEN").read_text())
+        self.assertEqual(self.goal_map(extra="pinned: true\n")[0][int(line)][:6], "★ OPEN")
+        self.board_py("open", str(line), "%9"); self.assertNotIn("pinned:", self.charter_path("OPEN").read_text())
 
     # --- goals on the task list: mirrored from the charter, and ticked back into it ---
 
