@@ -1,0 +1,45 @@
+#!/bin/sh
+# The ws tmux session: the board's tree sidebar on the left, Claude Code on the right. `cc` in ~/.zshrc runs this.
+# The bindings are applied on every run, a reattach included, so a change here reaches a running ws on the next `cc`.
+board="$(cd "$(dirname "$0")/.." && pwd)/hooks/board.py"
+
+if ! tmux has-session -t ws 2>/dev/null; then
+  right=$(tmux new-session -d -s ws -c "$PWD" -x "$(tput cols)" -y "$(tput lines)" -P -F '#{pane_id}' \
+    'claude agents --permission-mode auto')
+  tmux split-window -h -b -l 40 -t ws -c "$PWD" "uv run --no-project $board render --watch --tree"
+  # No status bar. A title line over the right pane names the open session; board.py open sets @ws_name.
+  tmux set -t ws status off
+  tmux set -p -t "$right" @ws_name "agent view"
+  tmux set -w -t ws pane-border-status top
+  tmux set -w -t ws pane-border-format '#{?#{@ws_name}, #[bold]#{@ws_name} ,}'   # the sidebar has no name, so no title
+  tmux set -t ws mouse on
+  tmux select-pane -t "$right"
+fi
+
+# The sidebar is the pane running the board, and its directory is the board's project; the right pane is the other one,
+# whatever a click has respawned it to run.
+panes=$(tmux list-panes -t ws -F '#{pane_id} #{pane_start_command}')
+side=$(printf '%s\n' "$panes" | awk '/render --watch --tree/ { print $1; exit }')
+right=$(printf '%s\n' "$panes" | awk '!/render --watch --tree/ { print $1; exit }')
+if [ -z "$side" ] || [ -z "$right" ]; then
+  echo "ws: no sidebar and right pane in session ws; kill it (tmux kill-session -t ws) and run cc again" >&2; exit 1
+fi
+dir=$(tmux display -p -t "$side" '#{pane_current_path}')
+
+tmux set-hook -t ws client-resized "resize-pane -t $side -x 40"   # -l 40 holds only at creation; undocking a window shrinks it
+# Click a tree row: open its session in the right pane, or reset it from its ↻ (hence the column). A click anywhere else
+# keeps tmux's default. The binding is server-wide; the pane-id test confines it to this sidebar. run-shell -c does not
+# expand formats, so the board's directory is fixed here.
+tmux bind -n MouseDown1Pane if -F -t = "#{==:#{pane_id},$side}" \
+  "run-shell -b -c '$dir' 'uv run --no-project $board open #{mouse_y} $right #{mouse_x}'" \
+  "select-pane -t = ; send -M"
+# Option+j/k: next/previous session the sidebar can open without starting one. Option+n: the one that most needs you.
+# Option+m: a menu of every row. Option+e: Ian's note on the open workstream, shown under its row.
+# Server-wide keys too, so outside ws they pass through to the pane.
+tmux bind -n M-j if -F "#{==:#{session_name},ws}" "run-shell -b -c '$dir' 'uv run --no-project $board go next $right'" "send-keys M-j"
+tmux bind -n M-k if -F "#{==:#{session_name},ws}" "run-shell -b -c '$dir' 'uv run --no-project $board go prev $right'" "send-keys M-k"
+tmux bind -n M-n if -F "#{==:#{session_name},ws}" "run-shell -b -c '$dir' 'uv run --no-project $board go need $right'" "send-keys M-n"
+tmux bind -n M-m if -F "#{==:#{session_name},ws}" "run-shell -b -c '$dir' 'uv run --no-project $board menu #{client_name} $right'" "send-keys M-m"
+tmux bind -n M-e if -F "#{==:#{session_name},ws}" "run-shell -b -c '$dir' 'uv run --no-project $board note #{client_name} $right'" "send-keys M-e"
+
+exec tmux attach -t ws

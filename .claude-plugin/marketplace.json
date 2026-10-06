@@ -1,0 +1,8 @@
+{
+  "name": "ikstewa",
+  "description": "Ian's personal plugins",
+  "owner": { "name": "Ian Stewart" },
+  "plugins": [
+    { "name": "workstreams", "description": "Workstream board, charters, tmux sidebar and active-session dispatch", "source": "./" }
+  ]
+}

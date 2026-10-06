@@ -1,0 +1,5 @@
+{
+  "name": "workstreams",
+  "version": "0.1.0",
+  "description": "Workstream board, charters, tmux sidebar and active-session dispatch"
+}

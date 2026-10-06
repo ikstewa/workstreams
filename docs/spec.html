@@ -1,0 +1,1418 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="title" content="Workstreams and a control session for concurrent Claude Code sessions" />
+    <meta
+      name="description"
+      content="An opt-in, convention-based workflow layer over Claude Code's background sessions: workstreams with charters, one control session, one active session per workstream that a click reopens and a reset replaces, work in sub-agents, and a board that answers what now."
+    />
+    <meta name="date" content="2026-09-18" />
+    <meta name="tags" content="workflow,tooling,agents,sessions" />
+    <meta name="author" content="Ian" />
+    <title>Workstreams and a control session for concurrent Claude Code sessions</title>
+<style>
+  /* ── Palette ──────────────────────────────────────────────────── */
+  :root {
+    --ivory: #f7f6f2;
+    --paper: #ffffff;
+    --slate: #0f1916;
+    --accent: #14a085; /* primary emerald */
+    --accent-d: #0e7c68; /* darker teal for text on light bg */
+    --accent-soft: #dcf5ee; /* light teal for pill bg, hover, etc. */
+    --sand: #e8dfd0;
+    --moss: #6f8358;
+    --g100: #f1efe8;
+    --g200: #e5e2d9;
+    --g300: #c9c6bd;
+    --g500: #82817a;
+    --g700: #3a3c39;
+
+    --display:
+      ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto,
+      sans-serif;
+    --sans:
+      ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto,
+      Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+    /* Open Props spacing/size scale */
+    --size-1: 4px;
+    --size-2: 8px;
+    --size-3: 16px;
+    --size-4: 24px;
+    --size-5: 32px;
+    --size-6: 48px;
+    --size-7: 72px;
+    --size-8: 96px;
+    --radius-2: 8px;
+    --radius-3: 14px;
+    --radius-full: 999px;
+
+    --tldr-bg: #ecf0e5;
+    --tldr-bd: var(--moss);
+    --note-bg: #efe9df;
+    --note-bd: var(--g500);
+    --warn-bg: #f4e4da;
+    --warn-bd: var(--accent);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ivory: #1a1816; /* warm dark, not navy */
+      --paper: #232220;
+      --slate: #ede9e1;
+      --accent: #2ebe9f; /* brighter teal on dark bg */
+      --accent-d: #14a085;
+      --accent-soft: #1a3d33;
+      --sand: #3e332a;
+      --moss: #a0b589;
+      --g100: #262320;
+      --g200: #322e2a;
+      --g300: #4a4540;
+      --g500: #84827a;
+      --g700: #bfbab1;
+      --tldr-bg: #1f2f1f;
+      --note-bg: #2a2520;
+      --warn-bg: #3b281e;
+    }
+  }
+
+  /* ── Base ─────────────────────────────────────────────────────── */
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    margin: 0;
+    background: var(--ivory);
+    color: var(--slate);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 0 var(--size-5) var(--size-8);
+  }
+
+  /* ── Masthead ─────────────────────────────────────────────────── */
+  header.masthead {
+    padding: var(--size-8) 0 var(--size-5);
+    border-bottom: 1.5px solid var(--g300);
+    margin-bottom: var(--size-3);
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--g500);
+    margin: 0 0 var(--size-3);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 28px;
+    height: 1.5px;
+    background: var(--accent);
+  }
+  h1 {
+    font-family: var(--display);
+    font-weight: 500;
+    font-size: clamp(36px, 5vw, 56px);
+    line-height: 1.08;
+    letter-spacing: -0.018em;
+    margin: 0 0 var(--size-2);
+    max-width: 20ch;
+  }
+  h1 em {
+    font-style: italic;
+    color: var(--accent);
+  }
+  .lede {
+    font-size: 18px;
+    color: var(--g700);
+    line-height: 1.55;
+    margin: var(--size-3) 0 0;
+    max-width: 64ch;
+  }
+  .meta {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--g500);
+    margin: var(--size-4) 0 0;
+    display: flex;
+    align-items: center;
+    gap: var(--size-2);
+    flex-wrap: wrap;
+  }
+  .meta .dot {
+    color: var(--g300);
+  }
+
+  /* ── Sections ─────────────────────────────────────────────────── */
+  section {
+    margin-top: var(--size-7);
+    scroll-margin-top: 28px;
+  }
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--size-3);
+    margin-bottom: var(--size-3);
+  }
+  .sec-head .idx {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 600;
+    width: 30px;
+    flex-shrink: 0;
+  }
+  .sec-head h2 {
+    font-family: var(--display);
+    font-weight: 500;
+    font-size: 28px;
+    line-height: 1.15;
+    letter-spacing: -0.012em;
+    margin: 0;
+  }
+  .sec-head h2 em {
+    font-style: italic;
+    color: var(--accent);
+  }
+  section > p,
+  section > ul,
+  section > ol,
+  section > div,
+  section > table,
+  section > pre,
+  section > blockquote {
+    margin-left: 50px;
+  }
+  @media (max-width: 640px) {
+    section > p,
+    section > ul,
+    section > ol,
+    section > div,
+    section > table,
+    section > pre,
+    section > blockquote {
+      margin-left: 0;
+    }
+  }
+  h3 {
+    font-family: var(--display);
+    font-weight: 500;
+    font-size: 21px;
+    letter-spacing: -0.008em;
+    margin: var(--size-5) 0 var(--size-2) 50px;
+  }
+  h4 {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 15px;
+    letter-spacing: 0.01em;
+    margin: var(--size-3) 0 var(--size-2);
+  }
+  @media (max-width: 640px) {
+    h3 {
+      margin-left: 0;
+    }
+  }
+
+  /* ── Body text ────────────────────────────────────────────────── */
+  p {
+    margin: var(--size-2) 0;
+  }
+  p,
+  li {
+    color: var(--g700);
+  }
+  article > * > strong,
+  article p > strong {
+    color: var(--slate);
+  }
+  a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-color: var(--sand);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+  a:hover {
+    text-decoration-color: var(--accent);
+  }
+  blockquote {
+    border-left: 3px solid var(--g300);
+    padding: var(--size-1) var(--size-3);
+    color: var(--g700);
+    margin: var(--size-3) 0;
+    font-style: italic;
+  }
+  ul,
+  ol {
+    padding-left: var(--size-4);
+  }
+  li {
+    margin: var(--size-1) 0;
+  }
+
+  /* ── Tables ───────────────────────────────────────────────────── */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: var(--size-3) 0;
+    font-size: 14.5px;
+  }
+  th,
+  td {
+    border-bottom: 1px solid var(--g200);
+    padding: var(--size-2) var(--size-3);
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--g100);
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--g500);
+    border-bottom: 1.5px solid var(--g300);
+  }
+  tr:last-child td {
+    border-bottom: 0;
+  }
+
+  /* ── Code blocks ──────────────────────────────────────────────── */
+  code {
+    font-family: var(--mono);
+    font-size: 13.5px;
+  }
+  :not(pre) > code {
+    background: var(--g100);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    font-size: 12.5px;
+    color: var(--accent-d);
+  }
+
+  .code-block {
+    margin: var(--size-3) 0;
+  }
+  .code-block .file-label {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--g500);
+    margin-bottom: var(--size-1);
+    letter-spacing: 0.02em;
+  }
+  .code-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: var(--size-3);
+  }
+
+  /* <pre> outer chrome — Prism Tomorrow theme (loaded via CDN below) handles
+     background, foreground, and token colors. We just set margin so it sits
+     in the page rhythm. If Prism fails to load, code degrades to readable
+     plain monospace on the browser default. */
+  pre[class*="language-"] {
+    margin: var(--size-3) 0;
+  }
+
+  /* ── Callouts ─────────────────────────────────────────────────── */
+  .callout {
+    padding: var(--size-3) var(--size-4);
+    border-radius: var(--radius-2);
+    border-left: 3px solid;
+    margin: var(--size-3) 0;
+  }
+  .callout > :first-child {
+    margin-top: 0;
+  }
+  .callout > :last-child {
+    margin-bottom: 0;
+  }
+  .callout .label {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: var(--size-1);
+    display: block;
+  }
+  .callout-tldr {
+    background: var(--tldr-bg);
+    border-color: var(--tldr-bd);
+  }
+  .callout-tldr .label {
+    color: var(--moss);
+  }
+  .callout-note {
+    background: var(--note-bg);
+    border-color: var(--note-bd);
+  }
+  .callout-note .label {
+    color: var(--g500);
+  }
+  .callout-warn {
+    background: var(--warn-bg);
+    border-color: var(--warn-bd);
+  }
+  .callout-warn .label {
+    color: var(--accent);
+  }
+
+  /* ── Pills ────────────────────────────────────────────────────── */
+  .pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: var(--radius-full);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    background: var(--g100);
+    color: var(--g700);
+    border: 1px solid var(--g200);
+  }
+  .pill-spec {
+    background: var(--sand);
+    color: var(--accent-d);
+    border-color: var(--sand);
+  }
+  .pill-research {
+    background: #dde2ec;
+    color: #2c4a75;
+    border-color: #dde2ec;
+  }
+  .pill-investigation {
+    background: #d9e4d0;
+    color: #3e5a2a;
+    border-color: #d9e4d0;
+  }
+  .pill-review {
+    background: #e4dced;
+    color: #4f3a6f;
+    border-color: #e4dced;
+  }
+  .pill-plan {
+    background: #ecd7dd;
+    color: #7a2e47;
+    border-color: #ecd7dd;
+  }
+  .pill-report {
+    background: #dee0ec;
+    color: #2d3a6e;
+    border-color: #dee0ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    .pill-spec {
+      background: #3e2a1e;
+      color: #e8c7b2;
+      border-color: #4a3424;
+    }
+    .pill-research {
+      background: #1f2a3e;
+      color: #b2c7e8;
+      border-color: #2a3548;
+    }
+    .pill-investigation {
+      background: #1e3023;
+      color: #b7d49e;
+      border-color: #2a3c2f;
+    }
+    .pill-review {
+      background: #2d2238;
+      color: #c8b2e0;
+      border-color: #382e48;
+    }
+    .pill-plan {
+      background: #3a1f2a;
+      color: #e8b2c7;
+      border-color: #482b36;
+    }
+    .pill-report {
+      background: #20253a;
+      color: #b2bbe0;
+      border-color: #2a3048;
+    }
+  }
+
+  /* ── Split ────────────────────────────────────────────────────── */
+  .split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--size-4);
+    margin: var(--size-3) 0;
+  }
+  @media (max-width: 640px) {
+    .split {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* ── Cards ────────────────────────────────────────────────────── */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: var(--size-3);
+    margin: var(--size-4) 0;
+  }
+  .card {
+    background: var(--paper);
+    border: 1.5px solid var(--g300);
+    border-radius: var(--radius-3);
+    padding: var(--size-4);
+    transition:
+      transform 150ms ease,
+      box-shadow 150ms ease,
+      border-color 150ms ease;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(20, 20, 19, 0.07);
+    border-color: var(--slate);
+  }
+  @media (prefers-color-scheme: dark) {
+    .card:hover {
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    }
+  }
+  .card > :first-child {
+    margin-top: 0;
+  }
+  .card h4 {
+    margin-top: 0;
+    font-family: var(--display);
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.008em;
+  }
+  .card .card-eyebrow {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: var(--size-1);
+  }
+  .card p {
+    font-size: 14px;
+    color: var(--g700);
+    margin: var(--size-2) 0 0;
+  }
+
+  /* ── Steps ────────────────────────────────────────────────────── */
+  .steps {
+    counter-reset: step;
+    list-style: none;
+    padding: 0;
+    margin: var(--size-4) 0 var(--size-4) 50px;
+  }
+  @media (max-width: 640px) {
+    .steps {
+      margin-left: 0;
+    }
+  }
+  .steps > li {
+    position: relative;
+    padding: 0 0 var(--size-4) var(--size-6);
+    counter-increment: step;
+  }
+  .steps > li::before {
+    content: counter(step, decimal-leading-zero);
+    position: absolute;
+    left: 0;
+    top: -2px;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+  }
+  .steps > li::after {
+    content: "";
+    position: absolute;
+    left: 14px;
+    top: var(--size-3);
+    bottom: var(--size-1);
+    width: 1.5px;
+    background: var(--g300);
+  }
+  .steps > li:last-child::after {
+    display: none;
+  }
+  .steps > li > :first-child {
+    margin-top: 0;
+    font-weight: 600;
+    color: var(--slate);
+  }
+</style>
+    <style>
+      .toc { display: none; }
+      .toc-h { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--g500); margin: 0 0 var(--size-3); }
+      .toc ul { list-style: none; margin: 0; padding: 0; }
+      .toc li { margin: 0; }
+      .toc a { display: block; padding: 4px 0 4px var(--size-3); border-left: 2px solid var(--g200); color: var(--g500); text-decoration: none; font-size: 13px; line-height: 1.35; transition: color 120ms ease, border-color 120ms ease; }
+      .toc a:hover { color: var(--slate); border-left-color: var(--g300); }
+      .toc a.active { color: var(--accent-d); border-left-color: var(--accent); font-weight: 600; }
+      .toc li.toc-gap { margin-top: var(--size-3); }
+      @media (min-width: 1100px) {
+        .wrap { max-width: 1180px; display: grid; grid-template-columns: 196px minmax(0, 1fr); column-gap: var(--size-5); align-items: start; }
+        .toc { display: block; position: sticky; top: var(--size-5); max-height: calc(100vh - var(--size-6)); overflow-y: auto; padding: var(--size-3) 0; }
+      }
+      @media print { .toc { display: none; } }
+      .appendix-divider { margin: var(--size-8) 0 var(--size-6); padding-top: var(--size-5); border-top: 1px solid var(--g200); font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--g500); }
+      td.ok { color: var(--accent-d); }
+    </style>
+    <link rel="stylesheet" media="(prefers-color-scheme: light)" href="https://cdn.jsdelivr.net/gh/PrismJS/prism-themes/themes/prism-one-light.css" />
+    <link rel="stylesheet" media="(prefers-color-scheme: dark)" href="https://cdn.jsdelivr.net/gh/PrismJS/prism-themes/themes/prism-one-dark.css" />
+    <script defer src="https://cdn.jsdelivr.net/combine/npm/prismjs@1.29.0/prism.min.js,npm/prismjs@1.29.0/components/prism-javascript.min.js,npm/prismjs@1.29.0/components/prism-typescript.min.js,npm/prismjs@1.29.0/components/prism-python.min.js,npm/prismjs@1.29.0/components/prism-java.min.js,npm/prismjs@1.29.0/components/prism-go.min.js,npm/prismjs@1.29.0/components/prism-bash.min.js,npm/prismjs@1.29.0/components/prism-sql.min.js,npm/prismjs@1.29.0/components/prism-yaml.min.js,npm/prismjs@1.29.0/components/prism-json.min.js,npm/prismjs@1.29.0/components/prism-markup.min.js,npm/prismjs@1.29.0/components/prism-css.min.js"></script>
+  </head>
+  <body>
+    <div class="wrap">
+      <nav class="toc" aria-label="On this page">
+        <p class="toc-h">On this page</p>
+        <ul>
+          <li><a data-spy href="#layers">01 Three layers</a></li>
+          <li><a data-spy href="#workstreams">02 Workstreams and charters</a></li>
+          <li><a data-spy href="#control">03 Control</a></li>
+          <li><a data-spy href="#active">04 The active session</a></li>
+          <li><a data-spy href="#workers">05 Workers</a></li>
+          <li><a data-spy href="#board">06 The board</a></li>
+          <li><a data-spy href="#signaling">07 Signaling</a></li>
+          <li><a data-spy href="#guidance">08 Guidance</a></li>
+          <li><a data-spy href="#viewport">09 One terminal</a></li>
+          <li><a data-spy href="#packaging">10 Packaging and opt-in</a></li>
+          <li><a data-spy href="#decided">11 Decided and open</a></li>
+          <li class="toc-gap"><a data-spy href="#app-c">A Alternatives rejected</a></li>
+          <li><a data-spy href="#app-f">B Rationale</a></li>
+        </ul>
+      </nav>
+      <article>
+        <header class="masthead">
+          <div class="eyebrow">Spec · concurrent sessions</div>
+          <h1>Workstreams and a control session for <em>concurrent Claude Code sessions</em></h1>
+          <p class="lede">
+            About five Claude Code sessions run in this checkout at once, on different efforts and
+            different repos, and the person running them is the only place their combined state
+            exists. This document designs an opinionated way of working over Claude Code's own
+            background-session machinery: workstreams with charters, one control session, one
+            active session per workstream that a click reopens and a reset replaces, work delegated to sub-agents,
+            and a board that answers "what now". It is opt-in and adds no runtime. It does not
+            propose a daemon, a GUI, a second application, or a task queue that duplicates an issue tracker.
+          </p>
+          <p class="meta">
+            2026-09-18 · Ian · <span class="pill pill-spec">SPEC</span> · Sources: this
+            repository, Claude Code 2.1.276, 2.1.277 and 2.1.285, the code.claude.com
+            reference pages read on 2026-09-18, and live tests on this machine on 2026-09-18, 2026-09-21, 2026-09-22 and 2026-09-23.
+          </p>
+        </header>
+
+        <div class="callout callout-tldr">
+          <span class="label">TL;DR</span>
+          <p>
+            This is a convention-based workflow layer over Claude Code agents, not a system. Claude
+            Code already provides the machinery: background sessions with dispatch, a switcher, needs-input
+            state, stop, retire and resume; session names and a registry; cross-session messaging;
+            hooks that inject context at start; phone push. A project's memory already keeps a file per unit
+            of work. The layer adds conventions: the workstream as the unit,
+            with a charter of purpose, scope, focus and goals; one control session that
+            belongs to no workstream; one active session per workstream, dispatched in the background,
+            foreground only while Ian talks to it, reopened on a click even after Claude Code retires it, and
+            replaced only when Ian resets it from its row; work in
+            sub-agents and workers; the record synced every substantive turn. The code is one hook, one mod, one
+            skill, ten lines of statusline. It ships as an opt-in plugin so nobody else's sessions change.
+          </p>
+        </div>
+
+        <div class="split">
+          <div>
+            <h4>Built</h4>
+            <ul>
+              <li>Charter frontmatter on the per-workstream record, moved out of <code>memory/</code>.</li>
+              <li>One mod: the charter as a row of the bound session's conversation, at start, after <code>/clear</code> and after a compaction; the charter tool, the bound session's one way to write its charter; goal sync with the task list; and every session's board record, from the engine's own session, turn, tool and sub-agent events.</li>
+              <li>One hook: the record's state machine the mod drives, the charter writes and goal sync it runs under one lock, the record-sync hold, the board render the skill prints, and the sidebar click that reopens or resets a row's session.</li>
+              <li>One skill: prints the hook's board render, then ranking, charter interview, dispatch, stop and sweep.</li>
+              <li>A statusline count of sessions waiting with a live process behind them, and the statusline writing context size back to the record.</li>
+            </ul>
+          </div>
+          <div>
+            <h4>Not built</h4>
+            <ul>
+              <li>A daemon, queue file or second application. The live board is a read-only redraw loop over files the hook writes.</li>
+              <li>Planning and orchestration as separate roles.</li>
+              <li>Replacing a cold session on its own, or holding the prompt typed into it.</li>
+              <li>Terminal tabs as the switcher.</li>
+              <li>Agent Teams, a polling loop, an approval relay, a per-prompt alignment call.</li>
+            </ul>
+          </div>
+        </div>
+
+        <section id="layers">
+          <div class="sec-head"><span class="idx">01</span><h2>Three layers, and only the last is code</h2></div>
+          <p>
+            An inventory of this checkout found that each ask in the brief has a native or workspace-provided
+            piece already in place. The layer this document adds sits on top of both.
+          </p>
+          <table>
+            <thead><tr><th>Layer</th><th>Provides</th><th>Verified</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><strong>Claude Code</strong> (the machinery)</td>
+                <td>
+                  Background sessions: <code>claude --bg -n NAME "prompt"</code>; the agent view reached with ←,
+                  with Needs input, Working and Completed; <code>attach</code>, <code>stop</code>, <code>rm</code>,
+                  <code>respawn</code>; retirement of a settled session after 60 minutes with no input, and
+                  <code>attach</code> reviving a retired one. Session names and the session registry;
+                  <code>claude agents --json</code>, which is also where a background session's state is read.
+                  Cross-session <code>SendMessage</code> and <code>notify_when_idle</code>.
+                  Hooks on every lifecycle event, including context injection at SessionStart and
+                  UserPromptSubmit. <code>/clear</code> keeping a name. PushNotification to the phone through Remote Control.
+                </td>
+                <td class="ok">On this machine, 2026-09-18</td>
+              </tr>
+              <tr>
+                <td><strong>The workspace</strong> (the substrate)</td>
+                <td>
+                  A memory file per unit of work, read on resume and written at milestones by a ticket-to-PR skill chain. Worktree isolation through the
+                  WorktreeCreate hook and a write guard. The pattern where a SessionStart hook writes state under the
+                  project directory and the statusline renders it.
+                </td>
+                <td class="ok">In the checkout</td>
+              </tr>
+              <tr>
+                <td><strong>This design</strong> (conventions, plus enforcement)</td>
+                <td>
+                  The workstream as the unit; the charter; control; one active session per workstream; work in
+                  sub-agents; continuous capture; a click reopens a session and a reset replaces it; approvals answered where Claude Code puts them.
+                  Enforced by one hook, one skill and a statusline snippet, packaged opt-in (§10).
+                </td>
+                <td class="ok">Built</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>
+            What the layer adds over the agent view alone is grain and judgment. The agent view knows sessions
+            and their states. The layer knows workstreams, charters, what changed overnight, which session is cold,
+            and what to pick up next.
+          </p>
+        </section>
+
+        <section id="workstreams">
+          <div class="sec-head"><span class="idx">02</span><h2>Workstreams and charters</h2></div>
+          <p>
+            The unit of work is a <strong>workstream</strong>: a named effort that runs through many sessions,
+            usually several tickets, and often several repos, over days or weeks. Ian's memory index already
+            declares forty-odd of them by hand, one file each, some keyed by ticket and most keyed by topic.
+            The design makes that declaration explicit and gives it four fields.
+          </p>
+          <p><strong>A workstream is defined by declaration, not by Jira structure.</strong> Its charter has:</p>
+          <ul>
+            <li><strong>Purpose.</strong> Why it exists, one sentence. Required.</li>
+            <li><strong>Scope.</strong> What is in and what is out, two short lists. Optional at birth, drafted by the agent from the first session.</li>
+            <li><strong>Focus.</strong> What it is on right now. Rewritten as it moves; the agent proposes, Ian accepts.</li>
+            <li><strong>Goals.</strong> What finishing means, as an ordered checklist of <code>[ ]</code> and <code>[x]</code> lines under <code>goals:</code>. Required. Each goal is mirrored on the active session's task list: completing its task ticks the goal, and the session adds a goal through its charter tool (§4) when new work appears. Every goal ticked is the stopping condition, and the board then proposes closing the workstream (§8). A dormant row shows what is left: <code>all done</code>, <code>not started</code> while no session has taken a turn, <code>N goals left</code>, or <code>no goals</code> for a charter that has none yet.</li>
+          </ul>
+          <p>
+            <strong>A block, while one stands.</strong> When the work waits on something outside the session's control
+            and not on Ian, such as a review, someone's feedback or a merge, the workstream's session sets two more fields through
+            its charter tool (§4): <code>blocked:</code>, what it waits on, free text, quoted or not; and <code>blocked_since:</code>,
+            when it began, as <code>YYYY-MM-DDTHH:MM:SSZ</code>. The session removes both once the block clears, and nothing else clears
+            them. They live on the charter so that they outlive a retired or reset session, and a session picked up or
+            reopened with a block set first checks whether it still holds. <code>blocked:</code> without
+            <code>blocked_since:</code> is still a block, shown with no age; an empty one is none.
+          </p>
+          <p>
+            <strong>A note, while Ian has one.</strong> <code>note:</code> is a line of Ian's own on the workstream, free text
+            in double quotes, set and cleared from the sidebar (§9). Nothing else writes it, and the session reads it with the
+            rest of the charter.
+          </p>
+          <p>
+            Plus a <strong>references</strong> list that accumulates on its own: tickets, epics, PRs, docs, repos.
+            Tickets are references inside a workstream, not a level of it. A workstream with several deliverables
+            whose tickets close at different times is the normal shape, not a signal to split.
+          </p>
+          <p>
+            <strong>The charter and the record live in one file per workstream</strong>,
+            <code>~/.claude/projects/&lt;slug&gt;/workstreams/&lt;KEY&gt;.md</code>: the charter as frontmatter, the
+            handoff as the body. Today that content is a <code>project-&lt;slug&gt;.md</code> memory file,
+            written by the skill chain at milestones and read by a ticket skill on resume. It moves out of
+            <code>memory/</code> on purpose. Anything under <code>memory/</code> is indexed into every session and
+            eligible for recall into any of them; a workstream's record is relevant to exactly one session, the one
+            bound to it, plus control. The <code>workstreams/</code> directory is a sibling of <code>memory/</code>
+            and <code>board/</code>, so nothing there is indexed or recalled, and the mod appends it where it belongs.
+          </p>
+          <p>
+            <strong>The memory index shrinks.</strong> <code>MEMORY.md</code> loads into every session, and its Active
+            projects section is its largest block: a dense hook line per unit of work so that any session can pick any
+            of them up. Once the records move, that section goes with them. The bound session gets its charter and the newest
+            part of its record at start; control sees every workstream, live or dormant, on the board; no other session needs to
+            know. Memory keeps what is general: who Ian is, how he wants work done, references. A one-off migration
+            moves every existing project memory file into a workstream record, and the board's sweep repeats the move
+            for any project file a skill creates afterwards, so the leak does not reopen.
+          </p>
+          <p>
+            <strong>Two ways a workstream starts.</strong> A director-level one starts with a short interview in any
+            session: purpose, scope and goals. A ticket that no charter cites gets a one-ticket charter derived
+            from the ticket with no questions: purpose from the summary, scope equal to the ticket, and one goal, the
+            ticket at Done. The ticket skill gains one lookup: which charter cites this ticket, so "work on PROJ-12" lands on the
+            workstream that owns it rather than starting a new one.
+          </p>
+          <p>
+            <strong>Alignment, in three layers, none blocking.</strong> At session start the bound workstream's charter
+            reaches the session with one instruction: when a request falls outside scope, say so and offer to
+            extend the scope, do the work unattached, or start or attach to another workstream. The model already in the
+            session does the judging at no extra cost. Structural checks in hooks need no model: a worktree entered for a
+            repo not in the references, a ticket touched that no charter cites, a second active session on one
+            workstream. Each produces one advisory line. A semantic pass runs on demand in the board's deep mode, reads
+            each workstream's recent activity against its charter, and proposes a fresher focus line or asks whether a
+            request belongs elsewhere. Splitting is Ian's act, prompted only when a request does not serve the stated
+            purpose. Workstreams do not nest; charters link to each other, and Jira initiatives already render as the
+            umbrella.
+          </p>
+          <p>
+            <strong>An idle workstream</strong> is one whose record has a non-terminal status and no live session. The board groups by assignment, by block and, with nothing live, by goals (Active, Blocked, Idle, Unassigned, Done); a session's status colours its row and moves it only between Active and Blocked, or Active and Done for a finished workstream (§6). A <code>done</code> workstream stays on the board, labelled <code>done</code>, while a session of it is still live, in Done unless that session is working or asking Ian (then Active), and leaves the board when none is.
+            It appears on the board with its last handoff, which is how work Ian started and closed the tab on stops
+            being forgotten; after three quiet days it is stale instead, and the board carries its name rather than its
+            handoff (§6). This is the one place persistent memory is load-bearing for tracking: the record is the
+            workstream between sessions.
+          </p>
+        </section>
+
+        <section id="control">
+          <div class="sec-head"><span class="idx">03</span><h2>Control</h2></div>
+          <p>
+            <strong>Control</strong> is one session, named <code>control</code>, that belongs to no workstream. It
+            is the only session Ian keeps in the foreground by default.
+          </p>
+          <p><strong>Control owns the workstream level and the cross-workstream policy:</strong></p>
+          <ul>
+            <li>Creating and editing charters: the interview, attaching tickets, writing the goals, and closing a workstream once they are all ticked.</li>
+            <li>Dispatching active sessions and workers, stopping them, sweeping retired ones that no row reopens.</li>
+            <li>The working limit and the ranking policy.</li>
+            <li>The board.</li>
+          </ul>
+          <p>
+            <strong>Control holds no state.</strong> Every answer is re-derived from the records, the registry, and
+            on request GitHub PRs and Jira. Forwarded events are one line each. Ian can <code>/clear</code> it at
+            will; the name survives, and the next board rebuilds the picture. A session is control by its name,
+            <code>control</code>, which is also how other sessions address it as <code>@control</code>.
+          </p>
+          <p>
+            <strong>Control never plans a workstream inside itself.</strong> Forty minutes of one workstream's
+            design would fill its context and make it a member instead of the reader. It dispatches the
+            workstream's active session and stays out of it.
+          </p>
+        </section>
+
+        <section id="active">
+          <div class="sec-head"><span class="idx">04</span><h2>The active session</h2></div>
+          <p>
+            Each workstream has <strong>at most one active session</strong>. It does whatever the workstream needs
+            right now: in the foreground it talks to Ian about the plan; in the background it works the plan
+            through sub-agents and workers. It is the same session either way and flips between the two with ←
+            and Enter. Planning and orchestration are not separate roles; once execution is delegated, a conversation
+            about the plan and the coordination of its execution are the same kind of content and both fit in one
+            small session.
+          </p>
+          <p>
+            <strong>Naming binds.</strong> The session's name is the workstream key: <code>PAYMENTS_API</code>. The
+            plugin finds the session's registry file by its session id, reads the name there, and looks up the charter
+            that carries that key. For a workstream Ian starts by hand, <code>/rename</code> mid-session binds on the next
+            prompt. Claude Code renames a second interactive session that takes a live name, so a duplicate active
+            session announces itself; for background sessions the name is not deduplicated at startup, and the board
+            flags the duplicate from the registry instead.
+          </p>
+          <p>
+            <strong>The charter arrives as a conversation row.</strong> The plugin's mod appends it to the session's
+            conversation as a user row, which the model reads and Ian does not see as typed. The row opens with the
+            charter file's path and the operating rules, so no length limit can cut the rules off; then the frontmatter,
+            whole; then the record, cut to its newest 30,000 characters at a line start, with a line naming the file when
+            its start is left out. A fresh session gets that full row. A resume, a reopen or a reload, whose transcript
+            already holds a charter row, gets a refresh: the path, the rules and the frontmatter, which carry anything Ian
+            changed meanwhile, without the record the session already holds. After <code>/clear</code> the full row lands
+            ahead of the next prompt. After a compaction of the main conversation the full row follows at the next prompt or
+            model request. On each prompt the mod reads the session's registry file, and a new name from <code>/rename</code>
+            appends that workstream's charter. A session bound to no charter gets no row, and a failure appends nothing and
+            writes one line to the debug log.
+          </p>
+          <p>
+            <strong>The session writes its charter through one tool.</strong> The mod registers <code>mcp__workstreams__charter</code>
+            whenever <code>board.py</code> finds the session bound: at start, after <code>/clear</code> and on a <code>/rename</code>.
+            An unbound session never has it. One call carries any of five fields: <code>focus</code>, set on one line where it stands;
+            <code>record</code>, one entry appended to the record as a top-level bullet led by a bold date unless it brings its own;
+            <code>add_goals</code>, each new goal appended open with its task mirrored at once, and a goal already listed skipped;
+            <code>block</code>, which sets <code>blocked:</code> and stamps <code>blocked_since:</code> in UTC; and
+            <code>clear_block</code>, which removes both. Values are written double-quoted and escaped, so quotes, backslashes, colons
+            and <code>#</code> read back as written. No field reaches <code>note:</code> or a goal's checkbox: a tick stays on the task
+            list, because the session's own task call is what opens Ian's task panel. The mod answers the call itself, so core never
+            runs it and it asks for no permission in any mode; a sub-agent's call is refused. The write runs <code>board.py write</code>
+            on the mod's one queue, behind the record's events, and the call waits for that write alone. A refusal, a failed run or a
+            timeout reaches the model as an error that says why. The tool is deferred, so the operating rules name it and tell the
+            session to load it with ToolSearch. The rules say when to write; the tool's description says how.
+          </p>
+          <p>
+            <strong>Goal sync runs from the mod.</strong> It mirrors the charter's goals onto the task list at a start, at each
+            prompt, at each main-loop turn's end, and for the id a <code>/clear</code> or <code>/resume</code> goes on under. Once a
+            TaskUpdate has run, it ticks that task's goal from the task's file. Both run <code>board.py</code> on the same queue, so two
+            updates made in parallel tick one after the other. Every read, change and write of a charter, the tool's, a tick's and
+            Ian's note from the sidebar, holds one lock beside the charters, so none writes over another. No settings hook remains: a
+            session started before that change keeps its old ones until it reloads, and they now read nothing and print nothing.
+          </p>
+          <p><strong>Operating rules</strong>, stated once in the dispatch prompt and reinforced by the charter row:</p>
+          <ul>
+            <li>Work through sub-agents and workers; hold coordination only.</li>
+            <li>Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the charter tool, never by editing the file.</li>
+            <li>Keep the charter's goals current: completing a goal's task ticks it, and new work becomes a new goal through the tool.</li>
+            <li>When starting on a goal, set its task to in progress. Claude Code opens the task panel only on the session's own task
+              write, or a saved <code>showExpandedTodos</code> that any session with an empty list turns off again, so goal tasks the
+              mod writes stay folded until then.</li>
+            <li>Report to <code>@control</code>; ask before any push.</li>
+            <li>When a request falls outside the charter, say so and offer the three exits.</li>
+            <li>When the work waits on something outside the session and not on Ian, set a block with the tool, and clear it once it clears; picked up or reopened with a block set, first check whether it still holds.</li>
+            <li>The charter's <code>note:</code> line is Ian's own: read it. The tool cannot change it.</li>
+          </ul>
+          <p>
+            <strong>The active session is disposable.</strong> Dispatch starts it. <code>claude stop</code> from
+            control ends it. Claude Code's supervisor retires every settled background session that is neither
+            attached nor pinned once it has had no input for 60 minutes, a session waiting on a question included: it
+            reaps the process and removes the registry file. That is Claude Code's behaviour, not the board's. A
+            retired session stays in <code>claude agents --json --all</code> with no pid, and <code>claude attach</code>
+            with the first eight characters of its session id revives it under the same session id, with its whole
+            transcript; the session starts again, so its board record continues. <code>claude rm</code> takes it out of
+            the listing, and then nothing can revive it. Between one session and the next the record carries the state,
+            and a session ends with its record current because capture is continuous, so a shutdown at any moment loses nothing.
+          </p>
+          <p>
+            <strong>A click reopens; the reset button replaces.</strong> A click on a sidebar row opens that row's own
+            session and never a new one: a live session is attached as it stands, and a retired one still in the listing
+            is revived. An Idle row carries its workstream's latest active session, by last turn and else by start, and a
+            click dispatches a fresh session only when that session is gone from the listing or there never was one. The
+            prompt cache on this plan lives one hour. A session whose last turn is older than that is cold: reopening it
+            re-sends the whole conversation uncached, and an 80k-token transcript is common by mid-afternoon, while a fresh
+            session starts from the charter, the handoff, the plan and any worker results in about 6k tokens. So a cold row
+            of a charter's active session, whose turn is Ian's, shows <code>↻</code> as its status glyph; a click on it stops the session if it is live,
+            dispatches a fresh one with the same name, and opens that. Working rows, rows waiting on a permission or a
+            question, warm rows, control, workers and unassigned sessions, which have no charter to start fresh from, and an
+            Idle or Blocked row with nothing to reopen, whose click already starts fresh, never carry it. A Blocked row (§6)
+            shows <code>⏸</code> while its session is fresh and <code>↻</code> by these same rules once it is stale, so a
+            fresh session can be started once the block clears. The click checks again, so a session that has turned busy or started asking Ian since the redraw is only
+            opened. A dispatch holds its workstream for 15 seconds after <code>claude --bg</code> returns, so the second
+            click of a double-click starts nothing. Claude Code's own resume-from-summary dialog compacts a transcript into a generic summary; the handoff
+            is written by the session, structured, and lives where control and the board read it.
+          </p>
+          <p>
+            <strong>A hold enforces the convention a prompt cannot.</strong> A Stop hook holds the turn with one line
+            when sub-agents have finished since the record was last written and the turn is ending without a sync. It is
+            advisory in effect and costs nothing. No prompt is ever held.
+          </p>
+        </section>
+
+        <section id="workers">
+          <div class="sec-head"><span class="idx">05</span><h2>Workers and sub-agents</h2></div>
+          <p>
+            The active session does not do the work. <strong>In-process sub-agents</strong> take short synchronous tasks;
+            they die with the active session, and the board lists them only while they are running: the end of a sub-agent's run removes the row.
+            A turn that ends with one still running shows as Working, not unread: the session waits on the sub-agent. <strong>Background
+            workers</strong> are sessions of their own, named <code>&lt;WORKSTREAM&gt; work: &lt;task&gt;</code>, for
+            anything that should outlive the active session: a forty-minute test run, an integration suite, a long build. They
+            report to the board and to control, and to the active session only while it is live; they never wake a
+            retired session. A worker's permission prompts show under Needs input like any other session's.
+          </p>
+          <p>
+            Dispatching a worker goes through control so the naming stays in one place. The
+            active session may ask control for one by message.
+          </p>
+        </section>
+
+        <section id="board">
+          <div class="sec-head"><span class="idx">06</span><h2>The board</h2></div>
+          <p>
+            The board is a directory of small JSON files, one per session keyed by session id, plus
+            <code>control.json</code>, at
+            <code>~/.claude/projects/&lt;project&gt;/board/</code>. Every session in a project
+            and any of its worktrees resolves to that directory: <code>board.py</code>
+            strips the <code>/.worktrees/…</code> suffix from the project path to reach it. It is
+            outside the repository, so a worktree write guard and the repository's <code>.gitignore</code> do not
+            apply; it is per machine and per user, which is the scope of a session; and it is a sibling of
+            <code>memory/</code>, not inside it, so nothing on the board is recalled into context.
+          </p>
+          <p>
+            <strong>A record carries</strong> the session id and pid, the workstream from the name, whether the session
+            is the active one or a worker, cwd and repo and branch, state (<code>busy</code>,
+            <code>idle</code>, <code>waiting</code>, <code>ended</code>), what it is waiting for and since when, the last
+            assistant message truncated, its children with their states, context size and cache warmth written by the
+            statusline, and timestamps.
+          </p>
+          <p>
+            <strong>Registration is involuntary.</strong> The mod writes the record from the engine's own events, one
+            <code>board.py event</code> run per transition (§7). The runs queue in the order the events come and run one at a time
+            from a timer of the mod's, so no hook waits for one, and a hook whose dispatch is abandoned, as an Esc at a dialog
+            abandons it, cannot stop one; only <code>session.end</code> waits, inside its short bound, since an exit follows. It finds the session's identity, its name,
+            pid and workstream, in the registry file that names its session id. A session does not declare itself; the mod
+            runs in every session that loads the plugin, so a session that forgets the naming convention still appears, under
+            its derived name, flagged as unassigned. It forwards an event only after the engine has decided it and changes
+            nothing it passes on, so it can never alter a permission decision. The plugin keeps no settings hook: goal sync runs
+            from the mod too (§4).
+          </p>
+          <p>
+            <strong>Liveness comes from the operating system.</strong> A record whose pid has no registry file is dead,
+            whatever it says; and a registry file alone does not make one live, because removal is not synchronous and
+            the file outlives a killed session by anything from seconds to tens of seconds. Live means
+            both: a registry file, and a process answering to
+            that pid. The design adds no lease and no heartbeat of its own; the registry keeps one already. Records for
+            ended sessions are pruned by the skill after seven days.
+          </p>
+          <p>
+            <strong><code>claude agents --json</code> is not that authority.</strong> It keeps a background session
+            that died while listing <code>blocked</code>, so a row there reports state, not life. It is read for two things only. A <code>waitingFor</code> it names
+            while it lists a session <code>blocked</code> draws that session red, as an ask: the engine's own word for a dialog the mod sees no tool
+            check for, such as an MCP elicitation. And a retired session it still lists as a background session is one a click revives (§4). It is
+            never read for liveness, for a reply or for whether a turn is running. Where the board and the agent view
+            disagree, the board is the more accurate of the two, not the fallback: a workstream whose session died
+            while listing <code>blocked</code> renders as a dormant row, which is correct, while the agent view still shows that session
+            under Needs input.
+          </p>
+          <p>
+            <strong>A turn counts as running by the record.</strong> A live session is working while its record is
+            <code>busy</code> or a sub-agent of it runs. The mod sets <code>busy</code> at the start of every main-loop turn, one
+            begun without a typed prompt included, such as a task notification, a peer's message or a sub-agent's handback. Every
+            turn's end clears it: an answer, a refusal or an error leaves a reply waiting on Ian, and an interrupt settles the
+            record at once. So an interrupted session reads as settled, with its hours and, once it is cold, the reset button (§4);
+            a running one draws Working and a reset leaves it alone. A reply whose sub-agent still runs draws Working too: the
+            session waits on the sub-agent. The registry's <code>status</code>, the job file and the listing are not read for any
+            of this.
+          </p>
+          <p>
+            <strong>Blocked sits between Active and Idle, and holds only what is not Ian's move.</strong> A workstream whose
+            charter carries a block (§2) shows there with its key and a dimmed label of what it waits on and for how long,
+            <code>PR #12 · 2d</code>: minutes under an hour, hours under two days, days after. In the sidebar the label may take
+            half the row and the name truncates first; past half, what it waits on truncates before its age. Anything Ian can
+            act on outranks a block: a session of the workstream that is working, or waiting on a permission, a question or any
+            wait but a reply, shows in Active exactly as it would without one, green or red. A reply, read or unread, a settled
+            session, a retired one or none puts the row in Blocked. A click on it does what a click on that session does: it
+            attaches the live one, revives the latest retired one, or dispatches a fresh one when there is none. Its glyph is
+            <code>⏸</code>, and <code>↻</code> once its session is stale (§4). A Blocked row carries no need, so Option+n passes
+            over it (§9).
+          </p>
+          <p>
+            <strong>Done is the last group, after Unassigned, and holds only what has nothing left.</strong> A workstream
+            with no live session whose charter has goals, every one ticked, shows there labelled <code>all done</code>
+            instead of in Idle, so Idle holds only rows with work left. Its row is an Idle row in every other way: its glyph
+            is <code>◌</code>, and <code>↻</code> once its session is stale (§4); a click reopens or dispatches; and it
+            carries no need, so Option+n passes over it (§9). A live session of a charter whose goals are all ticked stays in
+            Active, because its status is Ian's move; a block keeps the row in Blocked; and a row whose last turn is three
+            days old still collapses into the stale line. A Done row is the board's proposal to close the workstream (§8).
+            A <code>status: done</code> charter with a live session shows there too, labelled <code>done</code>, unless a
+            session of it is working or asking Ian, which keeps it in Active. Such a row keeps its session's glyph and
+            colour and its need, so Option+n still reaches an unread reply or an ask.
+          </p>
+          <p>
+            <strong>A workstream nobody has worked on lately collapses to one line.</strong> The board renders every
+            workstream whose status is not <code>done</code> or <code>archived</code>, two lines apiece, and there are
+            forty-odd of them once the project memory files have all become records — a list as long as the memory index
+            it was meant to replace, and as little use. A board that lists everything is not a board. So a workstream
+            whose last session turn is more than <strong>three days</strong> old, and which has no session record at all,
+            is left out of that list and counted on one line at the end of it — unless the charter itself was written
+            within those same three days, which is what keeps a charter that has just been written on the board, one
+            dispatch away, instead of reading as abandoned before its first session:
+            <code>stale (38, no session in 3d): PAYMENTS_API, PROJ-31, PROJ-44, …</code> — every key, alphabetical,
+            however many there are, since a sample would leave Ian wondering what else was on it. When nothing
+            is stale the line is absent, and the workstreams that remain render exactly as they did. Three days measures
+            a workstream and is not the hour of §4, which measures a session: a session goes cold when its prompt cache
+            expires, a workstream goes stale when no session has taken a turn on it in three days and it was not itself
+            written within that window.
+          </p>
+          <p>
+            <strong>Staleness is measured from session activity and from the charter's own birth date, never from the
+            record file.</strong> It is the most recent <code>last_turn_at</code> across the board records carrying the
+            workstream's key — the last time a session did work on it — and where no record names the key at all, that
+            is not enough on its own to call a workstream stale: the charter carries <code>created:</code>, a plain
+            <code>YYYY-MM-DD</code> a person writes once by hand when the charter is authored, and a charter created
+            within three days renders in full even with no session ever bound to it. A full ISO timestamp would be
+            noise in a file a person edits by hand, so the field stays a bare date. A workstream is stale only when all
+            three read old together: no live session, no <code>last_turn_at</code> within three days, and no
+            <code>created:</code> within three days — any one of the three is enough to keep it rendering as a row. A block keeps
+            the row too, however old the rest reads: a blocked workstream never collapses into the stale line, because its row
+            is where the block's age shows.
+            The record file's own modification time was the obvious place to read a birth date from instead of adding
+            a field, and is the wrong clock for the same reason it was rejected for <code>last_turn_at</code>: a
+            migration writes forty-odd charters in one pass, so every one of them would carry today's mtime and the
+            whole list would render fresh for three days, then collapse in a body on the fourth. A hand-authored
+            <code>created:</code> does not move when a bulk pass touches the file, so it is safe where mtime is not,
+            and nothing about what a migration writes has to change for it to work. A live session wins outright
+            regardless of any of this: staleness is computed only where nothing is live for that workstream, so a
+            session dispatched a minute ago, which has taken no turn yet, is never read as an abandoned effort. A
+            <code>last_turn_at</code> or a <code>created:</code> that cannot be parsed counts as old — stale-eligible
+            — the same as one that is simply absent: a date that cannot prove a charter current must not manufacture
+            a row that should not be there, so a key on that line can mean a record that is broken rather than a
+            workstream that is quiet.
+          </p>
+          <p>
+            <strong>Stale is a rendering state, not an ending.</strong> A workstream can be legitimately untouched for a
+            fortnight, so nothing sets <code>status: archived</code> on its own; the skill proposes the stale set and Ian
+            confirms. The collapse costs nothing and undoes itself on the next turn a session takes against the
+            workstream.
+          </p>
+        </section>
+
+        <section id="signaling">
+          <div class="sec-head"><span class="idx">07</span><h2>Signaling</h2></div>
+          <table>
+            <thead><tr><th>Mod event</th><th>Board transition</th><th>Forwarded to control</th></tr></thead>
+            <tbody>
+              <tr><td><code>session.start</code>; after <code>/clear</code> or <code>/resume</code>, the session id the process goes on under, once it shows: no event marks it, so the mod looks every 50 ms for 5 s, and a prompt that comes first, or the first after the last look, starts it instead; a <code>/rename</code> seen on a prompt while no turn runs</td><td>creates or refreshes the record: identity from the registry, <code>idle</code>, no wait, no children; keeps <code>started_at</code> and <code>last_turn_at</code></td><td>No</td></tr>
+              <tr><td><code>turn.start</code>, every main-loop turn, typed or not</td><td><code>busy</code>; clears <code>waiting_for</code>; stamps <code>last_turn_at</code></td><td>No</td></tr>
+              <tr><td><code>turn.complete</code>, answered, refused or failed</td><td><code>waiting</code> / <code>replied</code>, shown as <code>unread</code>; records <code>last_message</code>, keeping the last one when the answer is empty; stamps <code>last_turn_at</code>. Renders as Working while a child runs; shows as <code>read</code>, dimmed, once Ian has opened that workstream from the sidebar since the reply (<code>board/open.json</code>)</td><td class="ok">Yes</td></tr>
+              <tr><td><code>turn.complete</code>, aborted (Esc)</td><td><code>idle</code>; clears <code>waiting_for</code>; stamps <code>last_turn_at</code></td><td>No</td></tr>
+              <tr><td><code>tool.check</code> answering <code>ask</code> for a call: a dialog, or the auto-mode classifier</td><td><code>waiting</code> / <code>question</code> for AskUserQuestion, <code>permission</code> for any other call, a sub-agent's included; an earlier <code>waiting_since</code> stands</td><td class="ok">Yes</td></tr>
+              <tr><td><code>tool.call</code> returning a call that asked, once no other such call is out</td><td>what the wait covered: <code>busy</code> mid-turn, the reply a sub-agent's call asked over</td><td>No</td></tr>
+              <tr><td>A sub-agent's first model request of a run (<code>turn.step</code> with its <code>agentId</code>), and its <code>turn.complete</code></td><td>child added, named by its type from the session's agent list, running; removed at the run's end</td><td>No</td></tr>
+              <tr><td><code>session.end</code></td><td><code>ended</code> with <code>reason</code>, for the ending session id</td><td class="ok">Yes, when the record holds a workstream</td></tr>
+              <tr><td>The agents listing names a <code>waitingFor</code> (read at render, not a record write)</td><td>red, with the listing's words: a dialog the mod sees no tool check for, such as an MCP elicitation</td><td>No</td></tr>
+            </tbody>
+          </table>
+          <p>
+            <strong>Reaching control without polling.</strong> The hook reads <code>board/control.json</code>, checks the pid
+            is alive, and writes one line to control's inbox socket, whose path is in the registry. Under the default
+            inbound rule, auto mode is the prompting class and a raw line claims no permission class, so it is delivered
+            without a dialog; if control is idle, the line starts a turn, which refreshes the board and calls
+            PushNotification when the event is one Ian would leave his chair for. The socket's line protocol is documented
+            only as far as the auth line and a probe was denied by the auto-mode classifier in this session; it is the
+            first spike. Fallbacks: <code>notify_when_idle</code> subscriptions from control, which cover
+            "finished" but not "waiting"; and the agent view itself, which moves a waiting session to Needs input with no
+            help from this design.
+          </p>
+          <p>
+            <strong>Approvals cannot be centralised.</strong> Claude Code treats a message from another session as
+            untrusted input and never as consent. Control names the session and how to reach it; the approval happens
+            there, or on the phone through Remote Control. Decisions, as opposed to approvals, travel fine as messages:
+            the active session asks control by name, Ian answers in control, control relays.
+          </p>
+        </section>
+
+        <section id="guidance">
+          <div class="sec-head"><span class="idx">08</span><h2>Guidance</h2></div>
+          <p>
+            <strong>Control's first turn is the board.</strong> Control is dispatched on demand, from the sidebar's
+            Control row or Ian's launcher, with <code>/workstreams:board</code> as its first prompt; it gets no
+            charter. A click on the row opens a live control as it stands, and replaces one that is gone or
+            cold. The board reads local inputs only: the board records, the session registry and the workstream
+            records. It says which sessions are waiting and for what, where each workstream worked in the last three
+            days was left with its last handoff, how cold its last active session is, the rest of them on the single
+            stale line (§6); control adds a ranked "what now". <strong>The board calls nothing outside this
+            machine</strong>: no <code>gh</code>, no Jira. What changed overnight in reviews and CI is a
+            separate operation, run deliberately (below). The board is also the inbox for events that arrived while
+            no control was running: nothing is forwarded, but every event still reached its record.
+          </p>
+          <p><strong>Ranking</strong>, highest first, each with its reason stated:</p>
+          <ol>
+            <li>A session waiting on a permission or a question, oldest first. It stalls a running worker and takes seconds.</li>
+            <li>Something that changed outside: an approved PR, changes requested, a failed PR check. Someone else is waiting. It ranks only once the sweep has run.</li>
+            <li>A finished session whose next step is a skill, such as completing the code or handling an approval.</li>
+            <li>The workstream Ian was mid-flight on, reopened from its row, or reset to a fresh session from its handoff once it is cold.</li>
+            <li>A dormant workstream with no goals, or an orphan ticket no charter cites. Both are scoping decisions; the board proposes, Ian chooses. A workstream whose goals are all ticked reads <code>all done</code>: the board proposes <code>status: done</code>, Ian confirms, and nothing closes a workstream on its own.</li>
+            <li>Free capacity below the working limit: the sprint by priority.</li>
+            <li>Housekeeping: <code>claude rm</code> for retired sessions no row reopens, such as one a reset has replaced, removing merged worktrees, and archiving the workstreams on the stale line that Ian agrees are finished.</li>
+          </ol>
+          <p>
+            <code>/board</code> reads local inputs only and answers in seconds. The board is one deterministic render
+            function in the hook, <code>board.py render</code>: <code>/board</code> prints it verbatim,
+            then adds its "what now" under a separate heading as the model's own judgment. <strong><code>/board --deep</code> is the overnight sweep</strong>, and it is invoked, never automatic:
+            it adds your open GitHub PRs and the Jira tickets charters cite, reports what changed in reviews and CI since it last ran,
+            runs the drift check against each charter, and re-ranks. It takes as long as those calls take, which is why
+            it is a deliberate act in the first turn rather than something Ian waits on at every session start.
+            <code>/board &lt;WORKSTREAM&gt;</code>
+            shows the charter, the active session with its children and context, workers, worktrees, tickets, PRs, the
+            previous sessions by id, and the actions: message, open, stop, phone, edit charter.
+          </p>
+          <p>
+            Rules the skill honours because they are already recorded in the user's memory: ask before any push, and report external
+            state that changed mid-session rather than repairing it.
+          </p>
+        </section>
+
+        <section id="viewport">
+          <div class="sec-head"><span class="idx">09</span><h2>One terminal</h2></div>
+          <p>
+            Every session other than control is a background session, so the <strong>agent view is the switcher</strong>:
+            ← in any session shows Needs input, Working and Completed; Enter opens a row; ← again leaves it running. A
+            session opened this way is in the foreground while Ian talks to it and in the background otherwise. The live board runs beside it in a narrow
+            tmux pane.
+          </p>
+          <p>
+            The sidebar marks the row whose session is open in the right pane, with a bar in its first column. It marks a
+            row only while <code>board/open.json</code> and the right pane's title name the same key, because the file
+            outlives the pane: after a tmux restart the pane is rebuilt on the agent view, and the pane closes when its
+            <code>claude attach</code> exits.
+          </p>
+          <p>
+            A click on a row opens its session in the right pane (§4). tmux passes the click's column with its line, and a
+            click on a cold row's <code>↻</code> glyph, or the space after it, resets that session instead.
+          </p>
+          <p>
+            The keyboard switches too, from any pane, and focus stays where it is. Option+j and Option+k step to the next or
+            previous session the sidebar can open without starting one: a live background session, or a retired one that a
+            click revives. They follow the sidebar's order from the row open now and wrap at both ends, passing over any row
+            whose click would start a session or only say why it cannot. Option+n opens the session that most needs Ian. Red
+            rows come first, asking him for anything but a reply: a permission, a question, or what the listing says the
+            session waits for, the longest wait first. Unread replies follow, the oldest first, dated by the wait or else by the
+            last turn; a reply he has read is passed over, and so is every Blocked row, which waits on someone else. Control counts like any row. Like a step, it moves on from the row
+            open now, so pressing again goes down the list, and it opens only a row whose click would attach; with nothing to
+            open it says so. Option+m opens a menu of every row, and picking an
+            item is a click on that row. Option+e notes the workstream open in the right pane (below). The bindings apply only
+            inside the <code>ws</code> tmux session; elsewhere each key reaches the pane unchanged.
+          </p>
+          <p>
+            <strong>A note is Ian's own line on a workstream</strong>, for where it stands or that it needs nothing more from
+            him. Option+e opens a prompt for the workstream open in the right pane, labelled with its key and holding its
+            current note; Enter saves the line and an empty one clears it. With nothing open, or a session with no charter,
+            such as an unassigned one or control, it says so and opens no prompt. The note is the charter's
+            <code>note:</code> line (§2), so the session reads it with the rest of its charter. Only the prompt writes it, and
+            only that line. The session writes its charter only through its tool, which never touches <code>note:</code>, and every
+            charter write holds the charters' lock (§4), so none writes over the note. The sidebar draws a
+            note as a dim line directly under its row, on the group's trunk and above the row's hint and sub-agents, once for a
+            key with several rows; the wide board adds a <code>note:</code> line under the row. A note is display only: a row's
+            group, colour, glyph, place in a step and click are what they would be without it.
+          </p>
+          <p>
+            <strong>The rows under the footer describe the workstream open in the right pane.</strong> Below the quota line,
+            under a double rule, the sidebar draws that workstream's charter: its key and what is left of its goals, set off by
+            a blank row above and below, then what it is blocked on (§6) and Ian's note, dim under <code>⏸</code> and
+            <code>✎</code>, then its purpose, then its open goals at up to two rows apiece, a blank row between each. The focus is left out: it runs too long to read in a narrow pane. It takes the rows the board leaves
+            free and stops one short of the pane's last, which the watch's newline would scroll. What does not fit is cut, and
+            the last row shown ends in <code>…</code>, so a taller board leaves less of it, and a pane with no room under the
+            heading shows none. The agent view, control and an unassigned session have no charter, so with one of them open
+            the rows stay empty.
+          </p>
+          <p>
+            <strong>A click on a goal asks the open session to work on it.</strong> Either row of a goal in the panel types
+            <code>Focus on this goal: &lt;goal&gt;</code> into the right pane and presses Enter, so it reaches the session as
+            Ian's own message, and a turn that is running queues it as it would anything he typed. The text goes in as a
+            bracketed paste, which a vim-mode prompt takes as text even in NORMAL mode. It is never sent while that session
+            asks Ian for anything, a permission or a question, since Enter would answer the prompt; a tmux message says to
+            answer it first. Anything already typed in the prompt is sent with it. Every other row of the panel is display
+            only, and a goal's rows are not stops for the keys or items in the menu.
+          </p>
+          <p>
+            <code>bin/ws</code> builds the <code>ws</code> session and applies every binding, and it applies them again on each
+            run that reattaches, finding the sidebar and the right pane in the running session. A shell function that only
+            calls it never holds a stale copy of the bindings.
+          </p>
+          <p>
+            The agent view lists background sessions and the current one. Interactive sessions started in other terminals
+            do not appear in it, which is the second reason everything is dispatched as a background session. Programmatic
+            switching does not exist: no hook output or tool changes what a terminal shows, and a slash command arriving
+            from another session is plain text.
+          </p>
+          <p>
+            <strong>Tabs remain an escape hatch.</strong> Ghostty 1.3 ships an AppleScript dictionary, and three statements
+            open a tab in the existing window running a named session or <code>claude attach &lt;id&gt;</code>. It was verified on this machine and is kept for "open this one for me now", not as the flow.
+          </p>
+        </section>
+
+        <section id="packaging">
+          <div class="sec-head"><span class="idx">10</span><h2>Packaging and opt-in</h2></div>
+          <p>
+            <strong>This is how Ian wants to work, and it must not be imposed on anyone else.</strong> Everything here is
+            opt-in by construction and by packaging.
+          </p>
+          <ul>
+            <li>
+              <strong>By construction.</strong> The hook acts only on a session named <code>control</code> or bound by name
+              to a workstream charter. Every other session gets a board record under its derived name and nothing else: no
+              injected context, no holds, no forwarding. The charter interview, the board and the dispatch recipe are skills
+              invoked on purpose.
+            </li>
+            <li>
+              <strong>By packaging.</strong> The hook, the skill and the statusline snippet ship as a plugin, provisionally
+              <code>workstreams</code>, enabled at user scope in <code>~/.claude/settings.json</code>. A project's checked-in
+              settings carry none of it. A contributor who does not enable the plugin sees no change; one who does gets it in
+              every project, which is right, because workstreams are a person's way of working rather than a repository's.
+            </li>
+            <li>
+              <strong>Personal first.</strong> Nothing in the layer depends on a particular project except the memory store's
+              location. If the plugin proves useful to Ian alone, its home is his own plugin
+              directory; if to several people, a shared marketplace; the substrate stays where it is either way.
+            </li>
+          </ul>
+        </section>
+
+
+        <section id="decided">
+          <div class="sec-head"><span class="idx">11</span><h2>Decided and open</h2></div>
+          <div class="split">
+            <div>
+              <h4>Decided</h4>
+              <ul>
+                <li>The workstream is the unit; its charter is frontmatter on its record file under <code>workstreams/</code>, beside <code>memory/</code>, never inside it.</li>
+                <li>Project memory files migrate into workstream records once, and the sweep migrates any new one; the index's Active projects section goes away.</li>
+                <li>Every charter has goals, and every goal ticked is its stopping condition. A charter without them is flagged, not refused; one with every goal ticked is proposed for closing, never closed on its own.</li>
+                <li>A block lives on the charter, set and cleared only by the workstream's session; anything Ian can act on shows in Active over it.</li>
+                <li>One control session, stateless, belonging to no workstream.</li>
+                <li>One active session per workstream, background by default, no roles.</li>
+                <li>A click reopens a row's own session and a reset replaces it; no prompt is held; capture is continuous; work lives in sub-agents and workers.</li>
+                <li>The agent view is the switcher; tabs are an escape hatch.</li>
+                <li>The issue tracker remains the queue; approvals stay where Claude Code puts them.</li>
+                <li>Opt-in, packaged as a plugin; a project's shared settings unchanged.</li>
+              </ul>
+            </div>
+            <div>
+              <h4>Open</h4>
+              <ul>
+                <li>The inbox socket line protocol.</li>
+                <li>Whether the Stop hook should hold a turn or only remind.</li>
+                <li>The working limit and the dormant threshold; defaults five and seven days.</li>
+                <li>Names: <code>/board</code>, <code>/ws</code>, <code>workstreams</code> are placeholders.</li>
+                <li>Whether the plugin's home is a shared marketplace or a personal plugin directory.</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <div class="appendix-divider">Appendices</div>
+
+
+
+        <section id="app-c">
+          <div class="sec-head"><span class="idx">A</span><h2>Alternatives rejected</h2></div>
+          <h3>The unit and its sessions</h3>
+          <table>
+            <thead><tr><th>Alternative</th><th>Why not</th></tr></thead>
+            <tbody>
+              <tr><td>The session as the unit, keyed by session id</td><td>The first draft. A unit of work spans planning, orchestration, sub-agents and resumes over days; the session is the ephemeral part.</td></tr>
+              <tr><td>The ticket as the unit</td><td>Most of Ian's efforts span several tickets across projects, and several have no ticket. Tickets are references.</td></tr>
+              <tr><td>The epic or the initiative</td><td>Fails for cross-project and ticketless work; the initiative is too coarse to attach a session to. Both stay as references and as the umbrella a tracker renders.</td></tr>
+              <tr><td>Inferring the workstream from behaviour</td><td>Clustering sessions by repo or shared tickets is fragile and would surprise Ian. Declaration is one word in a name.</td></tr>
+              <tr><td>Planning and orchestration as separate roles</td><td>A residue of context bloat. With execution delegated, one active session holds both; a long design dialogue ends by handoff and clear, not by a second role.</td></tr>
+              <tr><td>A split test based on independent deliverables</td><td>Proposed and withdrawn. Several deliverables closing at different times is the normal shape. The only split signal is a request that does not serve the purpose.</td></tr>
+              <tr><td>A separate exit line beside the goals</td><td>It restates "every goal ticked" and drifts from it as goals are ticked or added.</td></tr>
+              <tr><td>A field naming who holds the next move</td><td>A dormant row is Ian's move by construction: Claude Code retires a background session only once it has settled, its turn ended or a question waiting on him.</td></tr>
+              <tr><td>Nested workstreams</td><td>Charters link; initiatives render the umbrella. Nesting is the first step toward a project-management tool.</td></tr>
+            </tbody>
+          </table>
+          <h3>Lifetime and viewport</h3>
+          <table>
+            <thead><tr><th>Alternative</th><th>Why not</th></tr></thead>
+            <tbody>
+              <tr><td>Replacing a session automatically once it is cold</td><td>Reopening keeps the working context, which a fresh session rebuilds only as far as the record reaches.</td></tr>
+              <tr><td>Holding the first prompt typed into a cold session</td><td>The reset button makes replacing a deliberate choice, made on the row before the session opens.</td></tr>
+              <tr><td>Claude Code's resume-from-summary dialog</td><td>A generic compaction inside the transcript. The handoff is structured, written by the session, and read by control and the board.</td></tr>
+              <tr><td>An end-of-session handoff ceremony</td><td>A ceremony gets skipped. Capture is every substantive turn, backed by the Stop hook, so a shutdown at any moment is lossless.</td></tr>
+              <tr><td>Terminal tabs as the switcher</td><td>Tabs were containers of state and are invisible to the agent view. The agent view switches; the Ghostty recipe stays as an escape hatch.</td></tr>
+              <tr><td>Programmatic session switching</td><td>No hook output or tool changes a terminal's foreground; a slash command from another session is plain text. A feature request, not a build.</td></tr>
+              <tr><td>A per-prompt alignment model call</td><td>Latency on every keystroke. The injected charter gets the same judgment from the session's own model for free.</td></tr>
+            </tbody>
+          </table>
+          <h3>Delivering the charter</h3>
+          <table>
+            <thead><tr><th>Alternative</th><th>Why not</th></tr></thead>
+            <tbody>
+              <tr><td>A section of the system prompt</td><td>The built-in guard that loads on a Team plan skips a user's mod on the system prompt's events and on the first message's context, and no setting opens them to one.</td></tr>
+              <tr><td>The settings hook's <code>additionalContext</code></td><td>It is capped at 10,000 characters. A charter with a long record lost the operating rules, which came after it.</td></tr>
+              <tr><td>An organization-tier mod, which the guard lets through</td><td>It loads for the whole organization, with no way to target one person or group, from a folder only an admin can write.</td></tr>
+            </tbody>
+          </table>
+          <h3>Writing the charter</h3>
+          <table>
+            <thead><tr><th>Alternative</th><th>Why not</th></tr></thead>
+            <tbody>
+              <tr><td>The session editing the charter file by hand, under written rules</td><td>Every rule about the file's shape had to hold on every edit: the quoting, the UTC stamp, where a new line goes, the note left alone. A slip broke what the board reads, and the rules ran long. The tool writes each field one way, escapes what it writes and cannot reach the note, so the rules shrink to when to write.</td></tr>
+              <tr><td>A separate tool per operation</td><td>A registered tool is deferred: the session loads each one with ToolSearch before its first call. One tool with optional fields loads once, and one call carries a turn's whole sync.</td></tr>
+              <tr><td>Ticking a goal through the tool</td><td>The session's own task call is what opens Ian's task panel, so a tick stays on TaskUpdate, which the mod watches.</td></tr>
+            </tbody>
+          </table>
+          <h3>State, signal and coordination</h3>
+          <table>
+            <thead><tr><th>Alternative</th><th>Why not</th></tr></thead>
+            <tbody>
+              <tr><td>A gitignored directory inside the checkout</td><td>A worktree write guard can deny writes there, a shared <code>.gitignore</code> may be managed elsewhere, and worktrees are separate checkouts.</td></tr>
+              <tr><td>An append-only audit-ledger kernel as the store</td><td>An append-only audit ledger with its own schema and a CLI limited to history, presence and export; deriving current state means views over an audit log, with its daemon as a dependency.</td></tr>
+              <tr><td>Jira alone</td><td>Knows the ticket's status, not which session holds it or that a permission is pending. It remains the queue.</td></tr>
+              <tr><td>The block on the session's board record</td><td>It would die with a retired or reset session, while the review or merge it waits on outlives both. The charter outlives every session.</td></tr>
+              <tr><td>Clearing the block on Ian's next prompt</td><td>Asking "any news?" would clear a block that still stands. Only the session, having checked, removes it.</td></tr>
+              <tr><td>A separate notes file</td><td>The session would never see Ian's note.</td></tr>
+              <tr><td>The native registry alone</td><td>Read-only, idle, busy or waiting only, no workstream, no last message. It is the liveness input, checked against the process itself, and the identity input, found by session id, and is used as both.</td></tr>
+              <tr><td>A delay before showing a permission wait</td><td>In auto mode most asks go to the classifier, which decided in 0.4 seconds with no dialog, so a delay would hide most of them; it would also hide the first seconds of a real dialog, and it needs a timer in the mod. The wait shows when <code>tool.check</code> answers <code>ask</code> and clears when the call returns: a classifier check reads as a dialog that answered itself.</td></tr>
+              <tr><td>Keeping the Notification settings hook</td><td>Its <code>permission_prompt</code> repeats what <code>tool.check</code>'s ask already says, and its <code>idle_prompt</code> marks a finished turn as a reply about a minute late, where <code>turn.complete</code> marks it at once. A dialog it reported that the mod cannot see, such as an MCP elicitation, still shows through the agents listing's <code>waitingFor</code>.</td></tr>
+              <tr><td>Reading a running turn from the registry's status, the job file, or ten seconds of grace after a prompt</td><td>Guesswork for an interrupt that fired no hook and a turn begun without a prompt. The mod's <code>turn.start</code> and <code>turn.complete</code> fire for both.</td></tr>
+              <tr><td>A <code>/loop</code> or CronCreate tick in control</td><td>A model turn per tick with nothing to report, session-only, seven-day cap. Kept as a heartbeat option if pushes fail.</td></tr>
+              <tr><td>Monitor watching the board directory</td><td>No <code>fswatch</code>; a sleep loop capped at thirty minutes per arm.</td></tr>
+              <tr><td>Agent Teams</td><td>Disabled and experimental. One team per session; teammates cannot be sessions Ian starts, die with the lead, are not restored on resume; their prompts land in the lead's session.</td></tr>
+              <tr><td>A queue file with forced outcomes, as an orchestration tool keeps one</td><td>The forced outcome here is the tracker status that work ends in. A second queue needs reconciliation on every read.</td></tr>
+              <tr><td>An approval relay through control</td><td>Prohibited by Claude Code in both the tool text and the reference.</td></tr>
+              <tr><td>Parsing transcripts</td><td>The format is internal and changes between releases.</td></tr>
+              <tr><td>tmux panes</td><td>Not installed, and the brief asks for one session to sit in.</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+
+
+        <section id="app-f">
+          <div class="sec-head"><span class="idx">B</span><h2>Rationale</h2></div>
+          <h3>The missing piece is a join and a set of habits, not a system</h3>
+          <p>Identity, liveness, messaging, dispatch, switching and phone reach are each native and were confirmed on this machine. Retirement is native too: Claude Code's supervisor retires a settled background session after 60 minutes with no input and keeps it listed, where <code>claude attach</code> revives it. The workstreams, their sessions and their wait states are all recorded somewhere; nothing records them together, and nothing tells a session how to behave so that it can be thrown away. A join is a small file and a reader; the habits are conventions a hook can back.</p>
+          <h3>The unit of work outlives the session, so the record must too</h3>
+          <p>Ian's own index proves the grain: forty-odd efforts, one file each, most spanning several tickets. Keying on the session inverted what he tracks. Keying on the workstream makes a dormant effort visible with no session alive, which is exactly what was being forgotten.</p>
+          <h3>Delegated execution is what lets one session hold both planning and orchestration</h3>
+          <p>The separate planning and orchestration sessions of today exist because execution filled the orchestrator's context. Once the work is in sub-agents and workers, the active session holds coordination and conversation only, which are the same size and the same kind of content.</p>
+          <h3>A click reopens because the transcript holds the working context, and a reset is one click away</h3>
+          <p>A one-hour cache and an 80k transcript make reopening a cold session the expensive path, and a fresh session from charter, handoff and plan costs a twelfth as much. But the transcript holds what the record only summarises, and a session Claude Code retired while Ian was away is one he means to come back to. So a click reopens it, and a cold row's reset button leaves replacing it to Ian. A fresh session starts already knowing what the previous one decided only if capture was continuous. That is why the Stop hook backs the sync rule.</p>
+          <h3>Registration must not depend on the worker cooperating</h3>
+          <p>A queue-file tool forces a declaration because its workers are opaque processes. Here every session runs the same mod and every turn's end hands over its answer, so a design that relied on the session ending its turn with a status line would fail silently the day it forgot.</p>
+          <h3>Approvals cannot be centralised, so the layer indexes them</h3>
+          <p>Claude Code treats a peer's message as untrusted input and never as consent. Pointing at the right session and pushing to the phone is the whole of what can be built, and the agent view already lands the session under Needs input.</p>
+          <h3>The agent view is the switcher because it is the only one that can be driven from inside Claude Code</h3>
+          <p>No hook or tool changes what a terminal shows. The agent view is two keystrokes and shows every background session; tabs required an emulator-specific script and hid sessions from it.</p>
+          <h3>Opt-in is a property of the packaging, not a promise</h3>
+          <p>A plugin enabled at user scope changes only the enabling user's sessions, and a hook that acts only on bound names changes only the sessions that asked. Both are checkable in the code, which is more than a note in a README.</p>
+          <h3>The issue tracker is already the queue with forced outcomes</h3>
+          <p>A ticket cannot leave a session's hands without a status change, so a second queue would be reconciled against the first on every read.</p>
+        </section>
+      </article>
+    </div>
+    <script>
+      (function () {
+        var links = [].slice.call(document.querySelectorAll(".toc a[data-spy]"));
+        if (!links.length) return;
+        var byId = {}, sections = [];
+        links.forEach(function (a) {
+          var el = document.getElementById(a.getAttribute("href").slice(1));
+          if (el) { byId[el.id] = a; sections.push(el); }
+        });
+        function spy() {
+          var current = sections[0];
+          for (var i = 0; i < sections.length; i++) {
+            if (sections[i].getBoundingClientRect().top <= 120) current = sections[i];
+          }
+          links.forEach(function (a) { a.classList.remove("active"); });
+          if (current && byId[current.id]) byId[current.id].classList.add("active");
+        }
+        spy();
+        var ticking = false;
+        window.addEventListener("scroll", function () {
+          if (!ticking) { ticking = true; window.requestAnimationFrame(function () { spy(); ticking = false; }); }
+        }, { passive: true });
+        window.addEventListener("resize", spy);
+      })();
+    </script>
+  </body>
+</html>
