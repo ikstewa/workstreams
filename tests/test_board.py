@@ -214,7 +214,7 @@ class BoardTest(unittest.TestCase):
         out = self.charter_of(); text, path = out["text"], str(self.charter_path())
         self.assertEqual({k: out[k] for k in ("key", "path", "name", "registry")},
                          {"key": "PAYMENTS_API", "path": path, "name": "PAYMENTS_API", "registry": str(Path(self.home) / ".claude" / "sessions" / "4242.json")})
-        fm = re.match(r"---\n(.*?)\n---\n", self.charter_path().read_text(), re.S).group(1)
+        fm = re.match(r"---\n(.*?)\n---\n", self.charter_path().read_text(), re.S).group(1).replace('  - "[x] Ship the renderer"\n', "").replace("goals:\n", "goals:\n# 1 done goals omitted\n")
         self.assertTrue(text.startswith(f"# Workstream charter ({path})\n\n# Operating rules\n"), text[:200])
         self.assertLess(text.index("# Operating rules"), text.index(f"\n---\n{fm}\n---\n"))   # the frontmatter whole, after the rules
         self.assertTrue(text.endswith("\n\n# Record\nHandoff: tests green, push pending."), text[-200:])
@@ -233,7 +233,8 @@ class BoardTest(unittest.TestCase):
         lines = [f"line {i:05d} " + "x" * (i % 70) for i in range(1500)]
         p.write_text(p.read_text().replace("Handoff: tests green, push pending.", "\n".join(lines)))
         body = "\n".join(lines); text = self.charter_of()["text"]
-        self.assertIn("\n---\n" + re.match(r"---\n(.*?)\n---\n", p.read_text(), re.S).group(1) + "\n---\n", text)
+        fm = re.match(r"---\n(.*?)\n---\n", p.read_text(), re.S).group(1).replace('  - "[x] Ship the renderer"\n', "").replace("goals:\n", "goals:\n# 1 done goals omitted\n")
+        self.assertIn("\n---\n" + fm + "\n---\n", text)
         head, kept = text.split("\n\n# Record\n")[1].split("\n", 1)
         self.assertEqual(head, f"(earlier record omitted: read {p})")
         self.assertTrue(body.endswith("\n" + kept)); self.assertTrue(kept.startswith("line "))
@@ -2061,6 +2062,26 @@ class BoardTest(unittest.TestCase):
         self.assertTrue(p.read_text().endswith(f"Landed.\n- **{today}** Third.\n"), p.read_text())   # one newline at the end, and no gap
         p.write_text("---\nworkstream: PAYMENTS_API\n---\n"); self.write(record="First.")   # an empty record
         self.assertEqual(p.read_text(), f"---\nworkstream: PAYMENTS_API\n---\n\n- **{today}** First.\n")
+
+    def test_a_record_write_over_budget_rolls_the_oldest_dated_rows_to_the_archive(self):
+        self.write_charter(); p = self.charter_path(); arch = p.parent / "PAYMENTS_API" / "record-archive.md"; ptr = "Earlier rows: PAYMENTS_API/record-archive.md"
+        self.write(record="Small."); self.assertFalse(arch.exists())   # under budget: nothing rolls
+        fmt = ("- **10-{d:02d}** {t}", "- 2026-10-{d:02d}: {t}", "- 2026-10-{d:02d} (Ian): {t}")
+        rows = [fmt[i % 3].format(d=i % 28 + 1, t=f"row {i:03d} " + "x" * 400) for i in range(100)]
+        p.write_text(p.read_text().split("\n\n", 1)[0] + "\n\n## Standing\n- **The design:** keep it small.\n\n## Progress\n" + "\n".join(rows) + "\n")
+        n = int(re.search(r"(\d+) rows rolled to the archive", self.write(record="Newest.")["summary"]).group(1))
+        body = p.read_text().split("\n---\n", 1)[1]
+        self.assertGreater(n, 0); self.assertLessEqual(len(body.strip()), 20_000)
+        self.assertEqual(arch.read_text(), "\n".join(rows[:n]) + "\n")   # the oldest, in order
+        self.assertTrue(all(s in body for s in ("## Standing", "- **The design:** keep it small.", "## Progress", rows[n], "Newest.")))
+        self.assertNotIn(rows[n - 1], body); self.assertEqual(body.count(ptr), 1)
+        self.assertEqual(self.write(record="Small.")["summary"], "record entry added\nno goals")   # under budget again: nothing rolls
+        self.assertEqual((arch.read_text(), p.read_text().count(ptr)), ("\n".join(rows[:n]) + "\n", 1))
+
+    def test_done_goals_stay_in_the_file_and_out_of_what_a_session_reads(self):
+        self.write_charter(extra=self.GOALS); text = self.charter_of()["text"]
+        self.assertNotIn("Ship the renderer", text); self.assertIn("goals:\n# 1 done goals omitted\n  - \"[ ] Run the schema migration\"\n  - [ ] Sweep\n", text)
+        self.assertIn('  - "[x] Ship the renderer"\n', self.charter_path().read_text())
 
     def test_the_tool_adds_each_new_goal_once_and_mirrors_its_task(self):
         self.write_charter(extra=self.GOALS); p = self.charter_path(); before = p.read_text(); self.mirror()

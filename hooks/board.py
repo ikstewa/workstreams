@@ -200,6 +200,26 @@ def sync(sid, tid=None):
 # What the charter tool's fields must be: the mod passes them as the model gave them.
 WRITES = {"focus": "text", "record": "text", "add_goals": "a list of goal texts", "block": "text", "clear_block": "true"}
 
+DATED = re.compile(r"- (?:\*\*)?(?:\d{4}-)?\d\d-\d\d")   # a dated row's bullet: **10-04**, 2026-10-04: and 2026-10-04 (Ian) all start so
+
+def roll(key, body):
+    """(body, N): `body` with its oldest N dated rows moved to <KEY>/record-archive.md, in order, until it fits two thirds of RECORD_BUDGET
+    or no dated row is left, and the one line pointing at the archive at its top. A row runs from its bullet to the next bullet or heading."""
+    # ponytail: a non-bullet paragraph straight after a row, before the next bullet or heading, is carried with that row
+    segs = []
+    for l in body.strip("\n").split("\n"):
+        if l.startswith(("- ", "#")) or not segs: segs.append([l])
+        else: segs[-1].append(l)
+    size, gone = len(body.strip()), set()
+    for i, s in enumerate(segs):
+        if size <= RECORD_BUDGET * 2 // 3: break
+        if DATED.match(s[0]): gone.add(i); size -= sum(len(l) + 1 for l in s)
+    if not gone: return body, 0
+    a = ws_dir() / key / "record-archive.md"; a.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(a, (a.read_text() if a.exists() else "") + "".join(l + "\n" for i in sorted(gone) for l in segs[i]))   # before the charter: a crash between repeats rows, never loses them
+    kept, ptr = [l for i, s in enumerate(segs) if i not in gone for l in s], f"Earlier rows: {key}/record-archive.md"
+    return "\n" + "\n".join(kept if ptr in kept else [ptr, ""] + kept).strip("\n") + "\n", len(gone)
+
 def write(sid, req):
     """`board.py write <session-id>`, the mod's charter tool: the fields on stdin onto the session's charter, in WRITES' order, under the
     lock, as {ok, key, summary}; or {error} for a call refused. No field reaches note: or a goal's checkbox."""
@@ -220,6 +240,9 @@ def write(sid, req):
             if not re.match(r"\*\*\d\d-\d\d", first): first = f"**{time.strftime('%m-%d')}** {first}"
             body = (body.rstrip() + "\n" if body.strip() else "\n") + f"- {first}" + (f"\n{rest}" if rest else "") + "\n"
             done.append("record entry added")
+            if len(body.strip()) > RECORD_BUDGET:
+                body, n = roll(rec["workstream"], body)
+                if n: done.append(f"{n} rows rolled to the archive")
         if "add_goals" in req:
             # ponytail: a goals: list written inline, as goals: [], is not one goals() reads; no charter has one
             have, at = {g for _, g, _ in goals("\n".join(lines))}, next((i for i, l in enumerate(lines) if l.startswith("goals:")), None)
@@ -242,6 +265,8 @@ def write(sid, req):
 BOUND_RULES = ("You are the active session for this workstream. Work through sub-agents and workers; hold coordination only. "
                "Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the mcp__workstreams__charter tool: "
                "load it with ToolSearch first, and never edit the charter file. "
+               "A record entry is one or two lines: what changed and what is next. Cite Ian's decisions by date and a few words, never quote him at length, "
+               "and do not restate what a commit or PR already holds. Old rows roll to the charter's archive on their own. "
                "Each goal is mirrored on your task list: when you start on one, set its task to in_progress with TaskUpdate, which opens Ian's task panel, "
                "and completing its task ticks the goal. When new work appears, add it as a goal with the tool. Ask before any push. "
                "The workstream is private to this machine: never mention it, its charter, goals, record or block in anything that leaves the machine, "
@@ -257,7 +282,15 @@ RECORD_BUDGET = 30_000   # characters of the record a session is handed: its new
 
 def charter_text(path, fm, body, refresh=False):
     """What a bound session reads of its charter: the rules ahead of everything a budget could cut, the frontmatter whole, then the
-    record's newest RECORD_BUDGET characters from a line start. A refresh leaves the record out: the session already holds it."""
+    record's newest RECORD_BUDGET characters from a line start. A refresh leaves the record out: the session already holds it.
+    Done goals stay in the file, which the board and the task list read, and leave the text, with a count in their place."""
+    gone, pos, keep = {fm.rfind("\n", 0, at) + 1 for d, _, at in goals(fm) if d}, 0, []
+    if gone:
+        for l in fm.split("\n"):
+            if pos not in gone: keep.append(l)
+            if l.startswith("goals:"): keep.append(f"# {len(gone)} done goals omitted")
+            pos += len(l) + 1
+        fm = "\n".join(keep)
     text = f"# Workstream charter ({path})\n\n# Operating rules\n{BOUND_RULES}\n\n---\n{fm}\n---"
     if refresh: return text
     body = body.strip()
