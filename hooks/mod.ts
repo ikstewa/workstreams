@@ -1,12 +1,13 @@
 import type { ApiMessage, EngineInterface, Register, ToolCallResult, ToolSpec } from 'claude-code'
 
-// A bound session's charter, as a user row of its conversation; the charter tool, its one way to write that charter; its goals kept in
-// step with its task list; and every session's board record. board.py builds the text, makes the writes and keeps the record's state
-// machine; this module decides when each runs and forwards the events the record moves on.
+// A bound session's charter, as a user row of its conversation; the charter tool, its one way to write that charter; the worker tool,
+// its one way to start a worker session; a worker's brief; its goals kept in step with its task list; and every session's board record.
+// board.py builds the text, makes the writes and keeps the record's state machine; this module decides when each runs and forwards the events the record moves on.
 // Every $-taking helper is a top-level function: the validator lets $ into no other.
 
 const HEAD = '# Workstream charter ('
 const TOOL = 'mcp__workstreams__charter'
+const WORKER_TOOL = 'mcp__workstreams__worker'
 
 // What the model reads to learn the tool: BOUND_RULES in board.py say when to write, this says how.
 const CHARTER: ToolSpec = {
@@ -45,7 +46,32 @@ const CHARTER: ToolSpec = {
   },
 }
 
-type Charter = { registry?: string; name?: string | null; key?: string; text?: string }
+// Where BOUND_RULES in board.py say when to start a worker, this says how.
+const WORKER: ToolSpec = {
+  name: 'worker',
+  description: [
+    'Starts a worker of your workstream: a background session named "<KEY> work: <task>", launched from the project root. ' +
+      'The worker enters its own worktree and messages you when it finishes. Start one worker for each repo or worktree. Do not run claude --bg yourself.',
+    '',
+    'The result has the name and the id of the worker. If the tool refuses a call, the error says why.',
+    '- task: A short label for the work. It becomes the part of the name after "work: ".',
+    '- prompt: The worker\'s brief. The worker does not see this conversation: say what to do, in which repo, and what to report.',
+    '',
+    'Only the main session can use this tool. A sub-agent cannot.',
+  ].join('\n'),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      task: { type: 'string', description: 'A short label for the work.' },
+      prompt: { type: 'string', description: 'The worker\'s brief.' },
+    },
+    required: ['task', 'prompt'],
+    additionalProperties: false,
+  },
+}
+
+// worker: a worker of a charter's key, which is briefed and given no charter tool.
+type Charter = { registry?: string; name?: string | null; key?: string; text?: string; worker?: boolean }
 
 // What `board.py event` applies to the record, each with what it carries.
 type Board =
@@ -58,7 +84,7 @@ type Board =
 
 // One board.py run, `board.py <cmd> <session id> [...args]`, its stdin built from the session's cwd as it starts; done hands what it
 // printed, or why it failed, to a caller that waits for it. `what` leads its debug line when it fails.
-type Job = { cmd: 'event' | 'write' | 'mirror' | 'tick'; args?: string[]; stdin?: (cwd: string) => string; sid?: string; timeoutMs: number; what: string; done: (out: Out) => void }
+type Job = { cmd: 'event' | 'write' | 'worker' | 'mirror' | 'tick'; args?: string[]; stdin?: (cwd: string) => string; sid?: string; timeoutMs: number; what: string; done: (out: Out) => void }
 type Out = { stdout: string } | { failed: string }
 
 // The registry file and name the last board.py read reported, and what is owed at the next prompt or main-loop model request.
@@ -102,7 +128,7 @@ async function inject($: EngineInterface, st: State, mode: 'full' | 'refresh'): 
     if (out.registry) Object.assign(st, { registry: out.registry, name: out.name ?? null })
     if (!out.text) return
     key = out.key
-    await offer($)
+    if (!out.worker) await offer($)
     const kept = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: out.text }] } })
     if (kept.deny !== undefined) throw new Error(`append refused: ${kept.deny}`)
   } catch (err) {
@@ -110,13 +136,15 @@ async function inject($: EngineInterface, st: State, mode: 'full' | 'refresh'): 
   }
 }
 
-// The charter tool, for a session board.py has just found bound. Registering it again replaces it with itself, so every bound read
-// registers it, a /clear's or a /rename's included; an unbound session never has it.
+// The charter and worker tools, for a session board.py has just found bound. Registering one again replaces it with itself, so every
+// bound read registers them, a /clear's or a /rename's included; an unbound session, or a worker, never has them.
 async function offer($: EngineInterface): Promise<void> {
-  try {
-    await $.tool.register(CHARTER)
-  } catch (err) {
-    $.ui.log(`charter tool not registered: ${reason(err)}`, { to: 'debug' })
+  for (const spec of [CHARTER, WORKER]) {
+    try {
+      await $.tool.register(spec)
+    } catch (err) {
+      $.ui.log(`${spec.name} tool not registered: ${reason(err)}`, { to: 'debug' })
+    }
   }
 }
 
@@ -165,15 +193,15 @@ async function drain($: EngineInterface, st: State): Promise<void> {
   st.draining = false
 }
 
-// What a write printed, as the tool's answer: its summary, or a refusal the model reads as an error.
-function answer(out: Out): ToolCallResult {
-  if ('failed' in out) return { deny: `the charter was not written: ${out.failed}` }
+// What a write printed, as the tool's answer: its summary, or a refusal the model reads as an error. `did` names what was not done.
+function answer(out: Out, did: { failed: string; json: string }): ToolCallResult {
+  if ('failed' in out) return { deny: `${did.failed}: ${out.failed}` }
   try {
     const said = JSON.parse(out.stdout) as { ok?: boolean; summary?: string; error?: string }
     if (said.ok === true) return { result: said.summary ?? '' }
     return { deny: said.error ?? 'board.py answered neither ok nor error' }
   } catch (err) {
-    return { deny: `the charter write answered no JSON: ${reason(err)}` }
+    return { deny: `${did.json}: ${reason(err)}` }
   }
 }
 
@@ -341,7 +369,16 @@ export const register: Register = on => {
   on('tool.call', { tool: TOOL }, async ($, e) => {
     if (e.agentId !== undefined) return { deny: 'only the main session writes the charter' }
     const fields = { focus: e.focus, record: e.record, add_goals: e.add_goals, block: e.block, clear_block: e.clear_block }
-    return answer(await queue($, st, { cmd: 'write', stdin: () => JSON.stringify(fields), timeoutMs: 8_000, what: 'charter not written' }))
+    return answer(await queue($, st, { cmd: 'write', stdin: () => JSON.stringify(fields), timeoutMs: 8_000, what: 'charter not written' }),
+      { failed: 'the charter was not written', json: 'the charter write answered no JSON' })
+  })
+
+  // The worker tool, answered the same way. board.py runs `claude --bg` from the project root, which returns at once and is cut off at 6 s.
+  on('tool.call', { tool: WORKER_TOOL }, async ($, e) => {
+    if (e.agentId !== undefined) return { deny: 'only the main session starts a worker' }
+    const fields = { task: e.task, prompt: e.prompt }
+    return answer(await queue($, st, { cmd: 'worker', stdin: () => JSON.stringify(fields), timeoutMs: 8_000, what: 'worker not started' }),
+      { failed: 'the worker was not started', json: 'the worker launch answered no JSON' })
   })
 
   // A goal task's status onto its goal once the update has run, queued, so two updates in parallel tick one after the other.

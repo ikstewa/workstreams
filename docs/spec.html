@@ -647,7 +647,7 @@
             <h4>Built</h4>
             <ul>
               <li>Charter frontmatter on the per-workstream record, moved out of <code>memory/</code>.</li>
-              <li>One mod: the charter as a row of the bound session's conversation, at start, after <code>/clear</code> and after a compaction; the charter tool, the bound session's one way to write its charter; goal sync with the task list; and every session's board record, from the engine's own session, turn, tool and sub-agent events.</li>
+              <li>One mod: the charter as a row of the bound session's conversation, at start, after <code>/clear</code> and after a compaction; the charter tool, the bound session's one way to write its charter; the worker tool, its one way to start a worker, and the brief a worker reads; goal sync with the task list; and every session's board record, from the engine's own session, turn, tool and sub-agent events.</li>
               <li>One hook: the record's state machine the mod drives, the charter writes and goal sync it runs under one lock, the record-sync hold, the board render the skill prints, and the sidebar click that reopens or resets a row's session.</li>
               <li>One skill: prints the hook's board render, then ranking, charter interview, dispatch, stop and sweep.</li>
               <li>A statusline count of sessions waiting with a live process behind them, and the statusline writing context size back to the record.</li>
@@ -884,6 +884,7 @@
           <p><strong>Operating rules</strong>, stated once in the dispatch prompt and reinforced by the charter row:</p>
           <ul>
             <li>Work through sub-agents and workers; hold coordination only.</li>
+            <li>For work in several repos or worktrees at once, launch one worker per repo or worktree with the worker tool, never <code>claude --bg</code> directly; each worker enters its own worktree and messages the session when done.</li>
             <li>Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the charter tool, never by editing the file.</li>
             <li>Keep the charter's goals current: completing a goal's task ticks it, and new work becomes a new goal through the tool.</li>
             <li>When starting on a goal, set its task to in progress. Claude Code opens the task panel only on the session's own task
@@ -943,8 +944,20 @@
             retired session. A worker's permission prompts show under Needs input like any other session's.
           </p>
           <p>
-            Dispatching a worker goes through control so the naming stays in one place. The
-            active session may ask control for one by message.
+            <strong>The active session starts a worker with one tool.</strong> The mod registers <code>mcp__workstreams__worker</code>
+            beside the charter tool, for a bound active session only; a sub-agent's call is refused. A call gives a <code>task</code>,
+            the short label that becomes the name, and a <code>prompt</code>, the worker's brief. The mod answers it itself, on the
+            same queue as the charter tool, and <code>board.py worker</code> runs <code>claude --bg -n "&lt;KEY&gt; work: &lt;task&gt;"
+            --permission-mode auto &lt;prompt&gt;</code> from the project root, never from the session's cwd, which may be a worktree.
+            The call returns the worker's name and id, or an error that says why. Work in several repos or worktrees at once runs as one
+            worker for each: every worker starts at the project root and enters its own worktree.
+          </p>
+          <p>
+            <strong>A worker reads a short brief and nothing more.</strong> Where an active session reads its charter, a worker of a
+            key that has a charter reads one row saying that it is a worker of the key, that it enters its own worktree before it
+            edits, that it sends the active session a message addressed to the key when it finishes or is stuck on something only that
+            session can resolve, and that the workstream is private to the machine. It has no charter tool and no goal tasks. Every
+            event refreshes its record's cwd, repo and branch, so its row shows the worktree it entered.
           </p>
         </section>
 
@@ -1005,6 +1018,17 @@
             a running one draws Working and a reset leaves it alone. A reply whose sub-agent still runs draws Working too: the
             session waits on the sub-agent. The registry's <code>status</code>, the job file and the listing are not read for any
             of this.
+          </p>
+          <p>
+            <strong>A worker is drawn under its workstream's row, as a sub-agent is.</strong> The head row is the workstream's active
+            session while one is live, and otherwise the charter's dormant row, drawn as it is with nothing live. A live worker follows
+            it on the group's trunk, after the head's sub-agents, as <code>├</code> or <code>└</code>, then its own state glyph and
+            the task, the part of its name after <code>work: </code>, with the repo and branch once its record has a branch, and its
+            own state and colour at the right. A click on it opens that worker. A worker shows only while its session is live, and a
+            workstream with a worker that is working or asking Ian sits in Active, as it would with such a session of its own. A
+            worker never counts toward <code>[duplicate]</code> and never carries <code>↻</code>, and its sub-agents are not drawn.
+            A worker of a key with no charter and no active session is drawn as a row of its own, by its key. The wide board lists
+            a worker under its workstream's row, labelled with its full name.
           </p>
           <p>
             <strong>Pinned is the first group, after Control, and holds what Ian pinned.</strong> A charter with a
@@ -1173,9 +1197,13 @@
           </p>
           <p>
             The sidebar marks the row whose session is open in the right pane, with a bar in its first column. It marks a
-            row only while <code>board/open.json</code> and the right pane's title name the same key, because the file
+            row only while <code>board/open.json</code> and the right pane's title agree, because the file
             outlives the pane: after a tmux restart the pane is rebuilt on the agent view, and the pane closes when its
-            <code>claude attach</code> exits.
+            <code>claude attach</code> exits. The file holds what the row opens, a workstream's key or a worker's session id, and the
+            title the pane carries for it, the key or the worker's name. Whether a reply is read, which row carries the bar and where
+            Option+j, Option+k and Option+n step are decided per session: a workstream's key stands for its active session, and each
+            worker is a row and a stop of its own. The rows under the footer and Option+e stay with the workstream, so a worker open
+            shows its workstream's charter.
           </p>
           <p>
             A click on a row opens its session in the right pane (§4). tmux passes the click's column with its line, and a

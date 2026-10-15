@@ -3,10 +3,11 @@
 import fcntl, json, os, re, shutil, sys, textwrap, time
 from pathlib import Path
 
+def project_root():
+    return re.sub(r"/\.worktrees/.*$", "", os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+
 def project_slug():
-    root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    root = re.sub(r"/\.worktrees/.*$", "", root)
-    return re.sub(r"[^A-Za-z0-9-]", "-", root)
+    return re.sub(r"[^A-Za-z0-9-]", "-", project_root())
 
 def board_dir():
     d = Path.home() / ".claude" / "projects" / project_slug() / "board"
@@ -62,6 +63,7 @@ def identity(sid, cwd=None):
 def event(sid, ev):
     """`board.py event <session-id>`: one transition the mod forwards, as JSON on stdin, onto the session's record."""
     rec, fresh = identity(sid, ev.get("cwd")); kind, now = ev.get("event"), NOW()
+    if ev.get("cwd"): rec["cwd"] = ev["cwd"]; rec["repo"], rec["branch"] = repo_branch(ev["cwd"])   # a worker that enters a worktree shows its repo and branch
     if kind == "start":   # started, resumed or renamed, or a /clear's new id: all but identity and the turn times starts over
         rec.update({k: v for k, v in fresh.items() if k not in IDENTITY + ("started_at", "last_turn_at")})
     elif kind == "turn.start":
@@ -262,7 +264,29 @@ def write(sid, req):
     if added: mirror_goals(rec, fm)   # its task shows at once
     return {"ok": True, "key": rec["workstream"], "summary": "\n".join(done + [left_of(goals(fm)) or "no goals"])}
 
+def launch(name, args, timeout, **kw):
+    """`claude --bg -n <name> <args>`: (the backgrounded id, "") or (None, what it printed, on one line)."""
+    import subprocess
+    p = subprocess.run(["claude", "--bg", "-n", name, *args], capture_output=True, text=True, timeout=timeout, **kw)
+    o = ANSI.sub("", p.stdout + p.stderr); m = re.search(r"backgrounded · (\S+)", o)   # the id is coloured even into a pipe
+    return (m.group(1), "") if m else (None, oneline(o))
+
+def worker(sid, req):
+    """`board.py worker <session-id>`, the mod's worker tool: `claude --bg` for a worker named "<KEY> work: <task>" from the project root,
+    not the session's cwd, which may be a worktree; as {ok, summary}, or {error}. The worker enters its own worktree."""
+    import subprocess
+    if not all(isinstance(req.get(k), str) and req[k].strip() for k in ("task", "prompt")): return {"error": "task and prompt must be text"}
+    if not (b := bound(sid)): return {"error": "this session is not bound to a workstream"}
+    name = f"{b[0]['workstream']} work: {' '.join(req['task'].split())}"
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}   # the worker is not a session of the cwd this ran in
+    # ponytail: the 6 s bound sits under the mod's 8 s run limit, so a hung claude reaches the model as its why
+    try: wid, why = launch(name, ["--permission-mode", "auto", req["prompt"]], 6, cwd=project_root(), env=env)
+    except (OSError, subprocess.TimeoutExpired) as err: return {"error": f"claude --bg failed: {err}"}
+    return {"ok": True, "summary": f'started "{name}", id {wid}'} if wid else {"error": f"claude --bg started nothing: {why or 'it printed nothing'}"}
+
 BOUND_RULES = ("You are the active session for this workstream. Work through sub-agents and workers; hold coordination only. "
+               "For work in several repos or worktrees at once, launch one worker per repo or worktree with the mcp__workstreams__worker tool "
+               "(load it with ToolSearch first), never `claude --bg` yourself; each worker enters its own worktree and messages you when done. "
                "Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the mcp__workstreams__charter tool: "
                "load it with ToolSearch first, and never edit the charter file. "
                "A record entry is one or two lines: what changed and what is next. Cite Ian's decisions by date and a few words, never quote him at length, "
@@ -277,6 +301,12 @@ BOUND_RULES = ("You are the active session for this workstream. Work through sub
                "When the work waits on something outside your control and not on Ian, such as a review, someone's feedback or a merge, set a block with the tool "
                "and clear it once it clears. When you are picked up or reopened with a block set, first check whether it still holds. "
                "The charter's note: line is Ian's own: read it. The tool cannot change it.")
+
+WORKER_BRIEF = ("# Workstream charter (worker of {key})\n\n"
+                "You are a worker of workstream {key}. You start at the project root: enter your own worktree before you edit anything. "
+                "When you finish, or are stuck on something only the active session can resolve, send it a message with SendMessage addressed to {key}. "
+                "The workstream is private to this machine: never mention it, its charter, goals, record or block in anything that leaves the machine, "
+                "such as a commit message, a PR title or description, a ticket, a comment or a document. State what the work is for in its own terms.")
 
 RECORD_BUDGET = 30_000   # characters of the record a session is handed: its newest, where the handoff is
 
@@ -302,11 +332,12 @@ def charter_text(path, fm, body, refresh=False):
 
 def charter(sid, refresh=False):
     """`board.py charter <session-id> [--refresh]`, the mod's read: {registry, name} from the registry file naming the session,
-    and with {key, path, text} for an active bound one; {} with no registry file."""
+    and with {key, path, text} for an active bound one, {key, worker, text} for a worker of a charter's key; {} with no registry file."""
     if not (hit := registered(sid)): return {}
     out = {"registry": str(hit[0]), "name": hit[1].get("name")}
     rec = new_record({"session_id": sid}, hit[1])
-    if rec["kind"] != "active" or not (found := find_charter(rec["workstream"])): return out
+    if rec["kind"] not in ("active", "worker") or not (found := find_charter(rec["workstream"])): return out
+    if rec["kind"] == "worker": return out | {"key": rec["workstream"], "worker": True, "text": WORKER_BRIEF.format(key=rec["workstream"])}
     return out | {"key": rec["workstream"], "path": str(found[0]), "text": charter_text(*found, refresh)}
 
 def alive(pid):
@@ -372,27 +403,36 @@ def load_records():
     return records
 
 def seen():
-    """board/open.json: {"open": key in the right pane, "seen": {key: when Ian last had it open}}. Only sidebar clicks write it."""
+    """board/open.json: {"open": what is in the right pane, "title": its pane title when that is not "open", "seen": {what: when Ian last had it open}}.
+    What a row opens is its stop(): a workstream's key, or a worker's session id. Only sidebar clicks write it."""
     try: return json.loads((board_dir() / "open.json").read_text())
     except (OSError, ValueError): return {}
 
+stop = lambda e: e["session_id"] if "worker" in e else e["key"]   # what a tree-rows.json entry opens: a worker is its own stop, as its record is its own
+
+def ws_of(token):
+    """The workstream key of what is open: a worker's own, else the token itself."""
+    rec = load_record(token) if token else None
+    return rec["workstream"] if rec and rec.get("kind") == "worker" else token
+
 def open_key(pane=None):
-    """The key open in the right pane: open.json's "open", only while that pane titles itself with it (@ws_name). The right pane is
+    """What is open in the right pane: open.json's "open", only while that pane titles itself with its title (@ws_name). The right pane is
     `pane` when the caller knows it (a key binding runs outside the sidebar), else any other pane in the sidebar's window.
     open.json outlives the pane: cc rebuilds it on the agent view after a tmux restart, and it closes when its attach exits."""
     import subprocess
-    key, me = seen().get("open"), os.environ.get("TMUX_PANE")
+    s = seen(); key, me = s.get("open"), os.environ.get("TMUX_PANE")
     if not (key and (pane or me)): return None
     try: p = subprocess.run(["tmux", "list-panes", "-t", pane or me, "-F", "#{pane_id}\t#{@ws_name}"], capture_output=True, text=True, timeout=1)
     except Exception: return None   # no tmux, or a hung one: no mark, never a missing board
-    return key if p.returncode == 0 and key in {n for i, _, n in (l.partition("\t") for l in p.stdout.splitlines()) if (i == pane if pane else i != me)} else None
+    return key if p.returncode == 0 and (s.get("title") or key) in {n for i, _, n in (l.partition("\t") for l in p.stdout.splitlines()) if (i == pane if pane else i != me)} else None
 
-def mark_open(key):
+def mark_open(token, title=None):
     # Leaving a session counts as having seen it up to now, as does opening one.
     s = seen(); at = s.get("seen") or {}; now = NOW()
     if s.get("open"): at[s["open"]] = now
-    at[key] = now
-    p = board_dir() / "open.json"; tmp = p.with_suffix(".tmp"); tmp.write_text(json.dumps({"open": key, "seen": at})); tmp.replace(p)
+    at[token] = now
+    p = board_dir() / "open.json"; tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"open": token, "seen": at} | ({"title": title} if title and title != token else {}))); tmp.replace(p)
 
 def charters(skip=("done", "archived")):
     """{key: (frontmatter, body)} for every charter whose status is not in `skip`."""
@@ -456,9 +496,12 @@ def place(records):
     rows, chart, sn = listing(), charters(), seen()
     pins = {k for k, (fm, _) in charters(skip=()).items() if scalar(fm, "pinned") == "true"}   # whatever the status, as notes() reads
     done = set(charters(skip=("archived",))) - set(chart)   # finished: shown only while a session of it is still live
-    # A reply is unread until Ian opens its workstream from the sidebar; the one open in the right pane is always read. ISO times compare as strings.
+    # A reply is unread until Ian opens its session from the sidebar, a worker's by its own id and any other by its workstream's key
+    # (the one open in the right pane is always read). ISO times compare as strings.
     at = sn.get("seen") or {}
-    unread = lambda key, r: key != sn.get("open") and (key not in at or (r.get("last_turn_at") or "") > at[key])
+    def unread(key, r):
+        tok = r["session_id"] if r.get("kind") == "worker" else key
+        return tok != sn.get("open") and (tok not in at or (r.get("last_turn_at") or "") > at[tok])
     # The pid check decides live; the listing is read only for a record already live by it.
     live = [r for r in records if r.get("kind") != "control" and r["state"] != "ended" and alive(r.get("pid"))]
     def reason(r):
@@ -491,7 +534,23 @@ def place(records):
         turn = f"unread · {left}" if left else "unread"
         note = (scalar(fm, "focus") or "(no focus)") + ("" if gl else "  [no goals]") if key in chart else "(unassigned)"
         block = block_of(fm)
-        mine = sorted(by_ws.get(key, []), key=lambda r: (reason(r) is None, r["session_id"]))
+        # A worker nests under its workstream's head row: the active session's, else the charter's dormant row. With neither, it stands alone.
+        nest = key in chart or any(r.get("kind") != "worker" for r in by_ws.get(key, []))
+        under = lambda r: nest and r.get("kind") == "worker"
+        mine = sorted(by_ws.get(key, []), key=lambda r: (under(r), reason(r) is None, r["session_id"]))
+        turns = [r["last_turn_at"] for r in records if r.get("workstream") == key and r.get("last_turn_at")]
+        since = hours_since(max(turns)) if turns else None
+        def dormant():
+            """The charter's row with no live active session: what is left, or the block, and the retired session a click revives."""
+            handoff = [l for l in body.splitlines() if l.strip()]
+            extra = [f"last: {oneline(handoff[-1])}"] if turns and handoff else []
+            # A dormant row is Ian's move, so it says what is left; every goal ticked outranks a charter no session has touched.
+            label = "not started" if not turns and left != "all done" else left or "no goals"
+            # Claude Code's supervisor retires a settled background session and keeps it listed: a click revives that session, never a new one.
+            last = max((r for r in records if r.get("workstream") == key and r.get("kind") == "active"), key=lambda r: r.get("last_turn_at") or r.get("started_at") or "", default=None)
+            sid = last["session_id"] if last and rows.get(last["session_id"], {}).get("kind") == "background" else None
+            reset = bool(sid) and (hours_since(last.get("last_turn_at")) or 0) > COLD_HOURS
+            return ("–", block or label + (f" · {since}h" if since is not None else ""), "2" if block else "34", extra, block or label, [], None, sid, reset, None, None)
         if mine:
             if sum(r.get("kind") == "active" for r in mine) > 1: note = "[duplicate] " + note
             if key in done: note = "done"
@@ -501,36 +560,30 @@ def place(records):
             # A finished workstream's session sits in Done unless it runs or asks Ian: those stay in Active, where he sees or answers them.
             fin = key in done and not any(code in ("31", "32") for _, code, _, _ in looks)
             group = "Blocked" if held else "Done" if fin else "Active" if key in chart or key in done else "Unassigned"
-            lines = []
+            lines = [] if any(not under(r) for r in mine) else [dormant()]
             for r, (state, code, short, reset) in zip(mine, looks):
-                if held: state = short = block; code = "2"
-                if key in done: short = "done"   # the tree's label; its glyph and colour still carry the session's status
+                if held and not under(r): state = short = block; code = "2"
+                if key in done and not under(r): short = "done"   # the tree's label; its glyph and colour still carry the session's status
                 guess = hint(r, chart) if key not in chart and key not in done else None
                 extra = ([f"likely: {guess}"] if guess else []) + ([f"last: {oneline(r['last_message'])}"] if r.get("last_message") else []) + \
                         [f"· {c.get('name')} {str(c.get('agent_id'))[:8]} {c.get('state')}" for c in r.get("children") or []]
+                wk = r.get("kind") == "worker" and {"name": r["name"], "task": r["name"].partition(" work: ")[2], "nested": under(r),
+                                                    "where": f"{r['repo']}/{r['branch']}" if r.get("branch") else None}
                 lines.append((r["session_id"][:8], state, code, extra, short, r.get("children") or [], guess, r["session_id"], reset,
-                              r.get("waiting_since") or r.get("last_turn_at")))   # the last six feed only tree()
+                              r.get("waiting_since") or r.get("last_turn_at"), wk or None))   # the last seven feed only tree()
             placed["Pinned" if key in pins else group].append((group, key, note, lines))
             continue
         # Nothing live. A block, a turn inside STALE_DAYS or a charter created inside it keeps the row; absent or unparseable reads old.
-        turns = [r["last_turn_at"] for r in records if r.get("workstream") == key and r.get("last_turn_at")]
-        since = hours_since(max(turns)) if turns else None
         cr = re.search(r"^created:\s*(\S+)", fm, re.M)
         created_days = days_since(cr.group(1)) if cr else None
         if key not in pins and not block and (since is None or since > STALE_DAYS * 24) and (created_days is None or created_days > STALE_DAYS):
             stale.append(key); continue
-        handoff = [l for l in body.splitlines() if l.strip()]
-        extra = [f"last: {oneline(handoff[-1])}"] if turns and handoff else []
-        # A dormant row is Ian's move, so it says what is left; every goal ticked outranks a charter no session has touched.
-        label = "not started" if not turns and left != "all done" else left or "no goals"
-        # Claude Code's supervisor retires a settled background session and keeps it listed: a click revives that session, never a new one.
-        last = max((r for r in records if r.get("workstream") == key and r.get("kind") == "active"), key=lambda r: r.get("last_turn_at") or r.get("started_at") or "", default=None)
-        sid = last["session_id"] if last and rows.get(last["session_id"], {}).get("kind") == "background" else None
-        reset = bool(sid) and (hours_since(last.get("last_turn_at")) or 0) > COLD_HOURS
         home = "Blocked" if block else "Done" if left == "all done" else "Idle"
-        placed["Pinned" if key in pins else home].append((home, key, note, [("–", block or label + (f" · {since}h" if since is not None else ""), "2" if block else "34", extra, block or label, [], None, sid, reset, None)]))
+        placed["Pinned" if key in pins else home].append((home, key, note, [dormant()]))
     ctl = [(r, *status("control", r)[:3]) for r in sorted((r for r in records if r.get("kind") == "control" and r["state"] != "ended" and alive(r.get("pid"))), key=lambda r: r["session_id"])]
     return ctl, placed, stale   # ctl: [(record, wide state, colour, tree label)]
+
+nested = lambda wk: wk and wk["nested"]   # the last field of a place() line: a worker drawn under its workstream's row
 
 def render(records, color=False):
     """The board, wide: one row per session with its focus, last message and children."""
@@ -547,8 +600,10 @@ def render(records, color=False):
         if not placed[g]: continue
         out.append(C("1", g))
         for _, key, note, lines in sorted(placed[g], key=lambda t: t[1]):
-            for i, (sid, state, code, extra, *_) in enumerate(lines):
-                out.append(f"  {C('36', key.ljust(kw))}  {sid.ljust(8)}  {C(code, state.ljust(sw))}  {note}".rstrip())
+            for i, (sid, state, code, extra, *rest) in enumerate(lines):
+                if nested(wk := rest[-1]):   # a worker, under its workstream's row and labelled with its name
+                    out.append(f"    {C('36', wk['name'])}  {sid.ljust(8)}  {C(code, state.ljust(sw))}  {wk['where'] or ''}".rstrip())
+                else: out.append(f"  {C('36', key.ljust(kw))}  {sid.ljust(8)}  {C(code, state.ljust(sw))}  {note}".rstrip())
                 out += [C("2", f"      {e}") for e in noted(key, i == 0) + extra]
     if stale:
         out.append(C("2", f"stale ({len(stale)}, no session in {STALE_DAYS}d): " + ", ".join(sorted(stale))))
@@ -564,9 +619,10 @@ def pane_width(width=None):
 def tree(records, color=False, width=None, hits=None, current=None, height=None):
     """The same board as render(), narrow: a file-tree sidebar for a tmux pane. Width is read per call, so a resize lands on the next redraw.
     `hits` gathers line number -> {key, session_id, glyph} for every clickable row: control, sessions, and idle, blocked and done workstreams,
+    and a worker's own row under its workstream's, which adds worker, its name,
     and line number -> {key, goal} for each row of a goal in the open workstream's panel and {key, pin} for its key row; nothing else.
     A row whose glyph is ↻ adds reset_x, the glyph's column. `current` is open_key(), resolved by the caller: its rows carry the bar,
-    and its charter fills the rows left under the footer. Height, like width, is read per call."""
+    and its charter, or its workstream's when it is a worker, fills the rows left under the footer. Height, like width, is read per call."""
     hits = {} if hits is None else hits
     C = lambda code, s: f"\033[{code}m{s}\033[0m" if color and code else s
     W, (ctl, placed, stale) = pane_width(width), place(records)
@@ -590,27 +646,36 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
     for g in GROUPS:
         if not placed[g]: continue
         out.append(C("1", f"▾ {g}"))
-        sessions = [(key, note.startswith("[duplicate]"), l, home) for home, key, note, ls in sorted(placed[g], key=lambda t: t[1]) for l in ls]
-        for i, (key, dup, (tag, _, code, _, short, kids, guess, sid, reset, since), home) in enumerate(sessions):
+        # A worker nests under its workstream's first head row (a [duplicate] key's first session), after that row's sub-agents.
+        sessions = []
+        for home, key, note, ls in sorted(placed[g], key=lambda t: t[1]):
+            heads = [l for l in ls if not nested(l[-1])]
+            sessions += [(key, note.startswith("[duplicate]"), l, home, [w for w in ls if nested(w[-1])] if n == 0 else []) for n, l in enumerate(heads)]
+        for i, (key, dup, (tag, _, code, _, short, kids, guess, sid, reset, since, wk), home, workers) in enumerate(sessions):
             # A stale row's status is that it is stale, so its glyph is the reset button. A dormant row (tag "–", nothing live, a retired session or none) is ◌; a live one keeps ○.
             glyph = "↻" if reset else "⏸" if home == "Blocked" else {"31": "●", "33": "●", "32": "▶"}.get(code, "◌" if tag == "–" else "○")
-            hits[len(out)] = {"key": key, "session_id": sid, "glyph": glyph} | ({"reset_x": 2} if reset else {}) | need(code, since)   # reset_x: the column after the two-column lead
+            hits[len(out)] = {"key": key, "session_id": sid, "glyph": glyph} | ({"worker": wk["name"]} if wk else {}) | ({"reset_x": 2} if reset else {}) | need(code, since)   # reset_x: the column after the two-column lead
             if home == "Blocked":   # a block's label may take half the row, and what it waits on gives way before its age
                 what, tail = re.fullmatch(r"(.*?)((?: · \d+[mhd])?)", short).groups(); short = oneline(what, W // 2 - len(tail)) + tail
             # ponytail: the title names a key, not a session, so every row of a [duplicate] key carries the bar
-            out.append(row("  ", glyph, key, short, tone(code), "36", dup, cap=W // 2 if home == "Blocked" else None, on=key == current))
+            out.append(row("  ", glyph, key, short, tone(code), "36", dup, cap=W // 2 if home == "Blocked" else None, on=(sid if wk else key) == current))
             trunk = "│" if i < len(sessions) - 1 else " "   # the group's trunk runs on while sessions follow
             if i == 0 or sessions[i - 1][0] != key: out += noted(key, trunk)   # a [duplicate] key's rows run together: its note shows once
             if guess: out.append(row(f"  {trunk} ", "→", f"{guess}?", "", "2"))
             for j, c in enumerate(kids):
-                out.append(row(f"  {trunk} ", "└" if j == len(kids) - 1 else "├", str(c.get("name")), str(c.get("state")),
+                out.append(row(f"  {trunk} ", "└" if j == len(kids) - 1 and not workers else "├", str(c.get("name")), str(c.get("state")),
                                "32" if c.get("state") == "running" else "2"))
+            for j, (_, _, wcode, _, wshort, _, _, wsid, _, wsince, w) in enumerate(workers):
+                wglyph = {"31": "●", "33": "●", "32": "▶"}.get(wcode, "○")   # the branch is the lead's last column; the glyph is the session's own state
+                hits[len(out)] = {"key": key, "session_id": wsid, "glyph": wglyph, "worker": w["name"]} | need(wcode, wsince)
+                out.append(row(f"  {trunk} " + ("└" if j == len(workers) - 1 else "├"), wglyph, w["task"] + (f" · {w['where']}" if w["where"] else ""), wshort,
+                               tone(wcode), on=wsid == current))
     count = f"stale ({len(stale)})"; full = f"{count}: " + ", ".join(sorted(stale))
     out += [C("2", "─" * W), C("2", full if stale and len(full) <= W else count)]
     if q := quota(W): out += [C("2", "─" * W), C(*q)]
     # The watch prints a newline after the board, so a board as tall as the pane would scroll its first row away.
-    for row, goal in details(current, W, (height or shutil.get_terminal_size().lines) - 1 - len(out), C):
-        if goal: hits[len(out)] = {"key": current, "pin": True} if goal is True else {"key": current, "goal": goal}
+    for row, goal in details(ws_of(current), W, (height or shutil.get_terminal_size().lines) - 1 - len(out), C):
+        if goal: hits[len(out)] = {"key": ws_of(current), "pin": True} if goal is True else {"key": ws_of(current), "goal": goal}
         out.append(row)
     return "\n".join(out)
 
@@ -734,18 +799,18 @@ def perform(entry, act, target):
         if act[0] == "restart":
             subprocess.run(["claude", "stop", act[1]], capture_output=True, timeout=60); act = ("dispatch", entry["key"])
         args = CONTROL if act[1] == "control" else ["--permission-mode", "auto", RESUME]
-        p = subprocess.run(["claude", "--bg", "-n", act[1], *args], capture_output=True, text=True, timeout=120)
-        o = ANSI.sub("", p.stdout + p.stderr); m = re.search(r"backgrounded · (\S+)", o)   # the id is coloured even into a pipe
-        act = ("attach", m.group(1)) if m else ("message", f"{act[1]}: {oneline(o) or 'dispatch printed nothing'}")
-        lock.touch() if m else lock.unlink(missing_ok=True)   # the hold runs from the dispatch's end; a failed one frees the key for a retry
+        wid, why = launch(act[1], args, 120)
+        act = ("attach", wid) if wid else ("message", f"{act[1]}: {why or 'dispatch printed nothing'}")
+        lock.touch() if wid else lock.unlink(missing_ok=True)   # the hold runs from the dispatch's end; a failed one frees the key for a retry
     if act and act[0] == "attach":
         tmux("respawn-pane", "-k", "-t", target, f"claude attach {act[1]}")
-        tmux("set", "-p", "-t", target, "@ws_name", entry["key"])   # the pane's title line (cc's pane-border-format) names what is open
-        mark_open(entry["key"])
+        title = entry.get("worker", entry["key"])
+        tmux("set", "-p", "-t", target, "@ws_name", title)   # the pane's title line (cc's pane-border-format) names what is open
+        mark_open(stop(entry), title)
     elif act: tmux("display-message", act[1])
 
 def step(way, target):
-    """`board.py go next|prev|need <pane>`: from the key open in `target`, open the next (or previous) row in the sidebar's order, wrapping,
+    """`board.py go next|prev|need <pane>`: from the stop open in `target` (a workstream's key, or a worker's session id), open the next (or previous) row in the sidebar's order, wrapping,
     whose click would attach: a live background session, or a retired one to revive. A row whose click would dispatch, restart or
     only explain is passed over, so a step never starts a session. With nothing open, next starts at the top and prev at the bottom.
     need steps the same way through only the rows waiting on Ian: the ones asking him for an answer, then his unread replies, each oldest first."""
@@ -754,11 +819,11 @@ def step(way, target):
     if way == "prev": order.reverse()
     # ponytail: an unread row, once opened, leaves the list at the next redraw, so the press after it starts again from the top
     if way == "need": order = sorted((e for e in order if e.get("need")), key=lambda e: (e["need"] != "asks", e.get("since") or ""))
-    here = open_key(target); at = next((i for i, e in enumerate(order) if e["key"] == here), -1)
+    here = open_key(target); at = next((i for i, e in enumerate(order) if stop(e) == here), -1)
     rows = functools.cache(listing)   # read once a step, and only for a row whose session is not live
     for e in order[at + 1:] + order[:at + 1]:
         # ponytail: a [duplicate] key is one stop, as the title names a key, not a session
-        if e["key"] != here and (act := judge(e, rows=rows)) and act[0] == "attach": return perform(e, act, target)
+        if stop(e) != here and (act := judge(e, rows=rows)) and act[0] == "attach": return perform(e, act, target)
     subprocess.run(["tmux", "display-message", "workstreams: nothing needs you" if way == "need" else "workstreams: no other session to open"], capture_output=True)
 
 MENU_KEYS = "123456789abcdefghijklmnoprstuvwxyz"   # no q: it closes a tmux menu
@@ -771,9 +836,9 @@ def menu(client, target):
     if not lines: return
     click = lambda n: f"run-shell -b -c {shlex.quote(os.getcwd())} {shlex.quote(shlex.join([sys.executable, os.path.abspath(__file__), 'open', n, target]))}"
     # A name is a tmux format, so a # in a key is doubled. A map from a sidebar older than the glyph field names the key alone.
-    name = lambda e: " ".join(filter(None, (e.get("glyph"), e["key"]))).replace("#", "##")
+    name = lambda e: " ".join(filter(None, (e.get("glyph"), e.get("worker") or e["key"]))).replace("#", "##")
     items = [a for i, n in enumerate(lines) for a in (name(hits[n]), MENU_KEYS[i:i + 1], click(n))]
-    at = next((i for i, n in enumerate(lines) if hits[n]["key"] == here), None)
+    at = next((i for i, n in enumerate(lines) if stop(hits[n]) == here), None)
     # -M: a menu opened from a key ignores the mouse without it.
     # ponytail: tmux draws no menu taller than the terminal, and nothing pages this one
     subprocess.run(["tmux", "display-menu", "-M", "-c", client, *(["-C", str(at)] if at is not None else []), *items], capture_output=True)
@@ -783,7 +848,7 @@ def note(client, target):
     Enter runs save_note() for it, and an empty line clears it."""
     import shlex, subprocess
     tmux = lambda *a: subprocess.run(["tmux", *a], capture_output=True, text=True)
-    if (key := open_key(target)) is None: return tmux("display-message", "-c", client, "workstreams: open a session first")
+    if (key := ws_of(open_key(target))) is None: return tmux("display-message", "-c", client, "workstreams: open a session first")
     if not (found := find_charter(key)): return tmux("display-message", "-l", "-c", client, f"workstreams: {key} has no charter to note")   # -l: a key is no format
     fmt = lambda s: s.replace("%", "%%").replace("#", "##")   # the label and the pre-fill are formats with strftime; -l keeps their commas
     # The reply reaches save_note() through an option: %%% escapes what the parser reads, and set reads nothing more, where run-shell's
@@ -824,6 +889,7 @@ def main():
     if sys.argv[1:2] == ["charter"]: print(json.dumps(charter(sys.argv[2], "--refresh" in sys.argv[3:]))); return
     if sys.argv[1:2] == ["event"]: event(sys.argv[2], json.load(sys.stdin)); return
     if sys.argv[1:2] == ["write"]: print(json.dumps(write(sys.argv[2], json.load(sys.stdin)))); return
+    if sys.argv[1:2] == ["worker"]: print(json.dumps(worker(sys.argv[2], json.load(sys.stdin)))); return
     if sys.argv[1:2] == ["mirror"]: sync(sys.argv[2]); return
     if sys.argv[1:2] == ["tick"]: sync(sys.argv[2], sys.argv[3]); return
     if sys.argv[1:2] == ["open"]:

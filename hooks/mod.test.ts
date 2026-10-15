@@ -13,6 +13,9 @@ const CWD = '/work'
 const REG = '/home/.claude/sessions/4242.json'
 const CHARTERED = ['PAYMENTS_API', 'ADOPTED']   // what board.py finds a charter for
 const TOOL = 'mcp__workstreams__charter'
+const WORKER_TOOL = 'mcp__workstreams__worker'
+const STARTED = JSON.stringify({ ok: true, summary: 'started "PAYMENTS_API work: fix", id 9d9d9d9d' })   // what board.py worker prints
+const WORKER_ROW = (key: string) => `# Workstream charter (worker of ${key})\n\nYou are a worker of workstream ${key}.`
 const WROTE = JSON.stringify({ ok: true, key: 'PAYMENTS_API', summary: 'focus set\n2 goals left' })   // what board.py write prints
 
 const charterText = (key: string, refresh: boolean) =>
@@ -30,6 +33,8 @@ function board(w: { name: string | null; registryless: boolean; fail?: Fail }, a
   if (w.fail === 'json') return done('{"text": ')
   if (w.registryless) return done('{}')
   const key = w.name ?? ''
+  const [parent, task] = key.split(' work: ')
+  if (task !== undefined && CHARTERED.includes(parent!)) return done(JSON.stringify({ registry: REG, name: w.name, key: parent, worker: true, text: WORKER_ROW(parent!) }))
   const bound = CHARTERED.includes(key) && { key, path: `/ws/${key}.md`, text: charterText(key, argv.includes('--refresh')) }
   return done(JSON.stringify({ registry: REG, name: w.name, ...bound }))
 }
@@ -57,6 +62,9 @@ function harness(name: string | null = 'PAYMENTS_API') {
     writes: [] as { sid: string; fields: unknown; timeoutMs?: number }[],   // board.py write: the session id, the fields on stdin, its timeout
     wrote: WROTE,
     writeFail: undefined as 'exit' | 'slow' | undefined,
+    launches: [] as { sid: string; fields: unknown; timeoutMs?: number }[],   // board.py worker: the session id, the fields on stdin, its timeout
+    launched: STARTED,
+    launchFail: undefined as 'exit' | 'slow' | undefined,
     tools: [] as ToolSpec[],   // $.tool.register, each call
     unregistrable: false,   // $.tool.register rejects
     core: [] as string[],   // tool calls that reached core
@@ -126,6 +134,11 @@ function harness(name: string | null = 'PAYMENTS_API') {
             return w.eventFail === 'exit' ? done('', 1, 'Traceback (most recent call last):\nValueError: unknown event\n') : done('')
           }
           w.jobs.push(argv.slice(4).join(' '))
+          if (cmd === 'worker') {
+            w.launches.push({ sid, fields: JSON.parse(init.stdin ?? '{}'), timeoutMs: init.timeoutMs })
+            if (w.launchFail === 'slow') throw new Error('process.run: still running at 8000 ms')
+            return w.launchFail === 'exit' ? done('', 1, 'Traceback (most recent call last):\nOSError: boom\n') : done(w.launched)
+          }
           if (cmd !== 'write') return done('')
           w.writes.push({ sid, fields: JSON.parse(init.stdin ?? '{}'), timeoutMs: init.timeoutMs })
           if (w.writeFail === 'slow') throw new Error('process.run: still running at 10000 ms')
@@ -661,11 +674,11 @@ test('the charter tool is registered whenever board.py finds the session bound, 
   expect(w.tools).toEqual([])
   w.name = 'ADOPTED'
   await fire.prompt('c')   // a /rename binds it
-  expect(w.tools.map(t => t.name)).toEqual(['charter'])
+  expect(w.tools.map(t => t.name)).toEqual(['charter', 'worker'])
   await fire.end('clear')
   w.sid = 's2'
-  await fire.prompt('d')   // the full row after a /clear registers it again
-  expect(w.tools).toHaveLength(2)
+  await fire.prompt('d')   // the full row after a /clear registers them again
+  expect(w.tools).toHaveLength(4)
   const bound = harness()
   await bound.fire.start()
   const [spec] = bound.w.tools
@@ -679,8 +692,53 @@ test('a refused registration logs one debug line, and the charter row still land
   w.unregistrable = true
   await fire.start()
   expect(w.rows).toHaveLength(1)
-  expect(w.logs).toEqual([{ to: 'debug', text: 'charter tool not registered: tool.register: refused' }])
+  expect(w.logs).toEqual([{ to: 'debug', text: 'charter tool not registered: tool.register: refused' }, { to: 'debug', text: 'worker tool not registered: tool.register: refused' }])
 })
+
+test('a worker of a charter key is briefed and offered neither tool; a worker of an unchartered key gets nothing', async () => {
+  const { w, fire } = harness('PAYMENTS_API work: fix')
+  await fire.start()
+  expect(w.rows).toEqual([WORKER_ROW('PAYMENTS_API')])
+  expect(w.tools).toEqual([])
+  const loose = harness('NOCHARTER work: fix')
+  await loose.fire.start()
+  expect(loose.w.rows).toEqual([])
+})
+
+test('the worker tool is a pair of required strings, written as sentences', async () => {
+  const { w, fire } = harness()
+  await fire.start()
+  const spec = w.tools.find(t => t.name === 'worker')
+  expect(spec?.inputSchema).toMatchObject({ required: ['task', 'prompt'], additionalProperties: false })
+  expect(Object.keys((spec?.inputSchema as { properties: object }).properties)).toEqual(['task', 'prompt'])
+  expect(spec?.description.split('\n').filter(l => l !== '' && !l.endsWith('.'))).toEqual([])   // no break inside a sentence
+})
+
+test('a worker call queues one launch with its task and prompt, answers with the worker, and core never runs it', async () => {
+  const { w, fire } = harness()
+  expect(await fire.call(WORKER_TOOL, 't1', { task: 'fix', prompt: 'Do it.', consent: 'yes' })).toEqual({ result: 'started "PAYMENTS_API work: fix", id 9d9d9d9d' })
+  expect(w.launches).toEqual([{ sid: 's1', fields: { task: 'fix', prompt: 'Do it.' }, timeoutMs: 8_000 }])
+  expect(w.jobs).toEqual(['worker s1'])
+  expect(w.core).toEqual([])
+})
+
+for (const [how, why] of [['sub-agent', 'only the main session starts a worker'], ['error', 'this session is not bound to a workstream'],
+                          ['exit', 'the worker was not started: board.py exited 1: OSError: boom'],
+                          ['slow', 'the worker was not started: process.run: still running at 8000 ms'],
+                          ['json', 'the worker launch answered no JSON: ']] as const) {
+  test(`a worker call that fails (${how}) is refused with why, never throws, and the next call is launched`, async () => {
+    const { w, fire } = harness()
+    if (how === 'error') w.launched = JSON.stringify({ error: why })
+    if (how === 'json') w.launched = '{"ok": '
+    if (how === 'exit' || how === 'slow') w.launchFail = how
+    const r = await fire.call(WORKER_TOOL, 't1', { task: 'fix', prompt: 'P', ...(how === 'sub-agent' ? { agentId: 'a1' } : {}) })
+    expect(r).toEqual({ deny: how === 'json' ? expect.stringContaining(why) : why })
+    expect(w.launches).toHaveLength(how === 'sub-agent' ? 0 : 1)
+    Object.assign(w, { launched: STARTED, launchFail: undefined })
+    expect(await fire.call(WORKER_TOOL, 't2', { task: 'fix', prompt: 'P' })).toEqual({ result: 'started "PAYMENTS_API work: fix", id 9d9d9d9d' })
+    expect(w.core).toEqual([])
+  })
+}
 
 test('a charter call reads its fields off the event, queues one write and answers with its summary, and core never runs it', async () => {
   const { w, fire } = harness()
@@ -874,7 +932,7 @@ test('in the engine, a start registers the charter tool and mirrors; the mod ans
   const k = engine(on)
   await startIn($)
   await k.clock.settle()
-  expect(k.tools).toEqual(['charter'])
+  expect(k.tools).toEqual(['charter', 'worker'])
   const wrote = $.tool.call({ tool: TOOL, focus: 'F' })
   await k.clock.settle()   // the call waits for its write, which a timer on the held clock runs
   expect(await wrote).toEqual({ result: 'focus set\n2 goals left' })

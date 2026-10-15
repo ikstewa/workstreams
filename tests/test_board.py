@@ -248,10 +248,10 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(full, refresh + "\n\n# Record\nHandoff: tests green, push pending.")
 
     def test_only_an_active_bound_session_gets_a_charter(self):
-        # control, a worker, an unnamed session and a key with no charter get their registry file and no text; an unknown id gets {}.
+        # control, an unnamed session and a key with no charter get their registry file and no text; an unknown id gets {}.
         self.write_charter(); self.write_charter("OTHER")
         reg = str(Path(self.home) / ".claude" / "sessions" / "4242.json")
-        for name in ("control", "PAYMENTS_API work: fix thing", None, "NOCHARTER"):
+        for name in ("control", None, "NOCHARTER", "NOCHARTER work: fix thing"):
             (Path(self.home) / ".claude" / "sessions" / "4242.json").write_text(json.dumps({"pid": 4242, "sessionId": "s1", "name": name, "cwd": self.proj}))
             self.assertEqual(self.charter_of(), {"registry": reg, "name": name}, name)
         self.assertEqual(self.charter_of("s-unknown"), {})
@@ -519,7 +519,7 @@ class BoardTest(unittest.TestCase):
         self.put("c1", "C", me); self.put("c2", "C", None)   # the second one is dead
         rows = {l.split()[0] + "/" + l.split()[1]: l for l in self.render("--no-color").splitlines() if l.startswith("  ") and not l.startswith("   ")}
         self.assertIn("[duplicate]", rows["A/a1"]); self.assertIn("[duplicate]", rows["A/a2"])
-        for k in ("B/b1", "B/b2", "C/c1"): self.assertNotIn("[duplicate]", rows[k])
+        for k in ("B/b1", "C/c1"): self.assertNotIn("[duplicate]", rows[k])   # B's worker is no head row: it nests under b1
 
     def test_render_survives_any_listing_failure(self):
         me = self.me(); self.write_charter(); self.put("s9", "PAYMENTS_API", me)
@@ -1124,7 +1124,8 @@ class BoardTest(unittest.TestCase):
         lines, hits = self.tree(40).splitlines(), self.hits()
         self.assertEqual({l.split()[1] for l in lines if l[2:3] == "↻"}, {"STALE", "REPLY", "RETIRED"})
         self.assertEqual(sum("↻" in l for l in lines), 3)   # the glyph only, never at the row's end as well
-        for k in ("WKR", "loose"): self.assertTrue(next(l for l in lines if f" {k} " in l).endswith(" 2.0h cold"), k)
+        self.assertTrue(next(l for l in lines if " loose " in l).endswith(" 2.0h cold"))
+        self.assertTrue(next(l for l in lines if " sweep" in l).endswith(" 2.0h cold"))   # a worker nests under WKR's dormant row, and never resets
         self.assertEqual({h["key"]: h["reset_x"] for h in hits.values() if "reset_x" in h}, {"STALE": 2, "REPLY": 2, "RETIRED": 2})
         self.assertEqual({int(n) for n, h in hits.items() if "reset_x" in h}, {i for i, l in enumerate(lines) if l[2:3] == "↻"})
         self.assertTrue(next(l for l in lines if " STALE " in l).endswith(" 2.0h"))   # the ↻ says cold
@@ -2153,6 +2154,221 @@ class BoardTest(unittest.TestCase):
                 p.write_text(re.sub(r"(?m)^purpose: .*$", f"purpose: {name} waited.", p.read_text()))
             self.assertEqual(run.wait(timeout=10), 0, name)
             text = p.read_text(); self.assertIn(theirs, text, name); self.assertIn(f"purpose: {name} waited.", text, name)
+
+    # --- workers: launched by the active session, nested under its row, each a stop of its own ---
+
+    def worker_home(self):
+        """A project root with a worktree under it, the charter in its board directory, and a fake claude that records where it ran and
+        what it was given. Returns (root, worktree, env as the mod starts board.py there)."""
+        root = Path(os.path.realpath(self.home)) / "proj"; wt = root / ".worktrees" / "web-app" / "X" / "y"; wt.mkdir(parents=True)
+        ws = Path(self.home) / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(root)) / "workstreams"; ws.mkdir(parents=True)
+        (ws / "PAYMENTS_API.md").write_text("---\nworkstream: PAYMENTS_API\n---\nHandoff.\n")
+        h = self.home
+        (self.bin / "claude").write_text(f"#!/bin/sh\npwd > {h}/claude.cwd\nprintf '%s\\n' \"$@\" > {h}/claude.argv\nprintf '%s' \"${{CLAUDE_PROJECT_DIR-unset}}\" > {h}/claude.env\n"
+                                         f"printf 'backgrounded · \\033[36m9d9d9d9d\\033[39m · x\\n'\n"); (self.bin / "claude").chmod(0o755)
+        return root, wt, {**self.env, "CLAUDE_PROJECT_DIR": str(wt)}
+
+    def start_worker(self, env, wt, **req):
+        p = subprocess.run([sys.executable, str(HOOK), "worker", "s1"], input=json.dumps(req), capture_output=True, text=True, env=env, cwd=wt)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)
+
+    def test_the_worker_tool_launches_from_the_project_root_under_the_workers_name(self):
+        # The active session may stand in a worktree: the worker still starts at the root, named from the key and the task, and enters its own.
+        root, wt, env = self.worker_home()
+        said = self.start_worker(env, wt, task="fix  the\nthing", prompt="Do it, 'quoted' once.", consent="yes")
+        self.assertEqual(said, {"ok": True, "summary": 'started "PAYMENTS_API work: fix the thing", id 9d9d9d9d'})
+        self.assertEqual((Path(self.home) / "claude.cwd").read_text().strip(), str(root))
+        self.assertEqual((Path(self.home) / "claude.argv").read_text().splitlines(),
+                         ["--bg", "-n", "PAYMENTS_API work: fix the thing", "--permission-mode", "auto", "Do it, 'quoted' once."])
+        self.assertEqual((Path(self.home) / "claude.env").read_text(), "unset")   # the worker is no session of the worktree this ran in
+
+    def test_the_worker_tool_refuses_what_it_cannot_start(self):
+        root, wt, env = self.worker_home()
+        for req in ({"task": "x"}, {"task": " ", "prompt": "p"}, {"task": "x", "prompt": 3}, {}):
+            self.assertEqual(self.start_worker(env, wt, **req), {"error": "task and prompt must be text"}, req)
+        for name in ("control", "PAYMENTS_API work: fix", "NOCHARTER"):   # only a bound active session starts a worker
+            (Path(self.home) / ".claude" / "sessions" / "4242.json").write_text(json.dumps({"pid": 4242, "sessionId": "s1", "name": name, "cwd": self.proj}))
+            self.assertEqual(self.start_worker(env, wt, task="x", prompt="p"), {"error": "this session is not bound to a workstream"}, name)
+        self.assertFalse((Path(self.home) / "claude.argv").exists())
+        (Path(self.home) / ".claude" / "sessions" / "4242.json").write_text(json.dumps({"pid": 4242, "sessionId": "s1", "name": "PAYMENTS_API", "cwd": self.proj}))
+        for out, why in (("", "it printed nothing"), ("Error: not logged in", "Error: not logged in")):   # no id: never a guessed one
+            (self.bin / "claude").write_text(f"#!/bin/sh\nprintf '%s' '{out}'\n"); (self.bin / "claude").chmod(0o755)
+            self.assertEqual(self.start_worker(env, wt, task="x", prompt="p"), {"error": f"claude --bg started nothing: {why}"})
+
+    def test_a_claude_that_hangs_or_is_missing_is_refused_with_why(self):
+        from unittest import mock
+        root, wt, env = self.worker_home()
+        with mock.patch.dict(os.environ, env): mod = self.module()
+        for err, text in ((subprocess.TimeoutExpired("claude", 6), "timed out after 6 seconds"), (FileNotFoundError("no claude"), "no claude")):
+            with mock.patch.dict(os.environ, env), mock.patch.object(mod, "launch", side_effect=err):
+                said = mod.worker("s1", {"task": "x", "prompt": "p"})
+            self.assertTrue(said["error"].startswith("claude --bg failed: ") and text in said["error"], said)
+        with mock.patch.dict(os.environ, env), mock.patch.object(mod, "launch", return_value=("9d9d9d9d", "")) as launched:
+            mod.worker("s1", {"task": "x", "prompt": "p"})
+        self.assertEqual(launched.call_args.args[2], 6)   # under the mod's 8 s limit on the run
+
+    def test_the_rules_send_multi_repo_work_to_the_worker_tool(self):
+        self.write_charter()
+        self.assertIn("For work in several repos or worktrees at once, launch one worker per repo or worktree with the mcp__workstreams__worker tool "
+                      "(load it with ToolSearch first), never `claude --bg` yourself; each worker enters its own worktree and messages you when done.",
+                      self.charter_of()["text"])
+
+    def test_a_worker_of_a_charter_key_is_briefed_and_gets_no_charter(self):
+        self.write_charter(extra=self.GOALS); self.become_worker()
+        out = self.charter_of(); text = out.pop("text")
+        self.assertEqual(out, {"registry": str(Path(self.home) / ".claude" / "sessions" / "4242.json"), "name": "PAYMENTS_API work: fix thing",
+                               "key": "PAYMENTS_API", "worker": True})   # no path, and no charter tool: the mod offers none to a worker
+        self.assertTrue(text.startswith("# Workstream charter (worker of PAYMENTS_API)\n\n"), text)
+        for want in ("You are a worker of workstream PAYMENTS_API.", "enter your own worktree before you edit anything",
+                     "send it a message with SendMessage addressed to PAYMENTS_API",
+                     "The workstream is private to this machine: never mention it, its charter, goals, record or block in anything that leaves the machine"):
+            self.assertIn(want, text)
+        for never in ("Operating rules", "Ship the renderer", "Handoff", "charter tool"): self.assertNotIn(never, text)   # no charter, goals or record
+        self.assertEqual(self.charter_of("s1", "--refresh")["text"], text)
+
+    def test_every_event_refreshes_the_records_cwd_repo_and_branch(self):
+        # A worker starts at the root and enters a worktree: its row follows it there, and an event with no cwd leaves what is there.
+        self.event("start"); self.assertEqual([self.rec()[k] for k in ("cwd", "repo", "branch")], [self.proj, "myproject", None])
+        wt = self.proj + "/.worktrees/web-app/PROJ-1/x"
+        run = lambda ev: subprocess.run([sys.executable, str(HOOK), "event", "s1"], input=json.dumps(ev), capture_output=True, text=True, env=self.env, check=True)
+        run({"event": "turn.start", "cwd": wt}); r = self.rec()
+        self.assertEqual(([r[k] for k in ("cwd", "repo", "branch")], r["state"]), ([wt, "web-app", "PROJ-1/x"], "busy"))
+        run({"event": "turn.complete", "reason": "answer", "answer": "x"}); r = self.rec()
+        self.assertEqual([r[k] for k in ("cwd", "repo", "branch")], [wt, "web-app", "PROJ-1/x"])
+
+    def with_workers(self):
+        """WS's charter with its active session busy and two workers of it: AUDIT asking Ian, SWEEP working in a worktree. A third is dead."""
+        me = self.me(); self.write_charter("WS")
+        self.put("a-full", "WS", me, state="busy")
+        self.put("w-audit", "WS", me, kind="worker", name="WS work: audit", state="waiting", waiting_for="permission", waiting_since=self.ago(1))
+        self.put("w-sweep", "WS", me, kind="worker", name="WS work: sweep", state="busy", repo="web-app", branch="X/y")
+        self.put("w-dead", "WS", None, kind="worker", name="WS work: gone", state="busy")
+        return me
+
+    def test_a_worker_nests_under_its_workstreams_row_with_its_own_state_and_click(self):
+        self.with_workers()
+        lines, hits = self.tree(40).splitlines(), self.hits()
+        i = next(n for n, l in enumerate(lines) if l.startswith("  ▶ WS "))
+        self.assertEqual(lines[i - 1], "▾ Active")   # asking or working, so Active
+        for row, head, label in zip(lines[i + 1:i + 3], ("    ├● audit", "    └▶ sweep · web-app/X/y"), ("permission", "working")):
+            self.assertEqual((row.startswith(head), row.endswith(label), len(row)), (True, True, 40), row)
+        self.assertEqual(lines[i + 3], "─" * 40)   # the dead worker draws nothing
+        self.assertEqual({n: (h["session_id"], h.get("worker"), h.get("need")) for n, h in hits.items() if h["key"] == "WS"},
+                         {i: ("a-full", None, None), i + 1: ("w-audit", "WS work: audit", "asks"), i + 2: ("w-sweep", "WS work: sweep", None)})
+        wide = self.render("--no-color").splitlines()
+        self.assertFalse(any("[duplicate]" in l for l in wide))   # a worker is no second head
+        self.assertEqual([l.split()[:3] for l in wide if l.startswith("    ")], [["WS", "work:", "audit"], ["WS", "work:", "sweep"]])
+        self.assertTrue(next(l for l in wide if l.startswith("    WS work: sweep")).endswith("web-app/X/y"))
+
+    def test_a_click_on_a_worker_row_attaches_its_session(self):
+        me = self.with_workers()
+        (Path(self.home) / ".claude" / "sessions" / f"{me}.json").write_text(json.dumps({"pid": me, "sessionId": "w-sweep", "kind": "bg", "jobId": "w-sweep"}))
+        line = next(n for n, h in self.hits().items() if h["session_id"] == "w-sweep")
+        self.assertEqual(self.open_line(line), ["respawn-pane|-k|-t|%9|claude attach w-sweep|", "set|-p|-t|%9|@ws_name|WS work: sweep|"])
+        self.assertEqual(json.loads((self.board / "open.json").read_text())["open"], "w-sweep")
+
+    def test_a_workstream_with_only_workers_live_keeps_its_dormant_row_as_head(self):
+        me = self.me(); self.write_charter("WS")
+        self.put("w-sweep", "WS", me, kind="worker", name="WS work: sweep", state="busy")
+        lines = self.tree(40).splitlines(); i = next(n for n, l in enumerate(lines) if l.startswith("  ◌ WS "))
+        self.assertEqual((lines[i - 1], lines[i + 1][:5]), ("▾ Active", "    └"))
+        self.assertTrue(lines[i].rstrip().endswith("not started"), lines[i])
+        self.assertEqual([h["session_id"] for h in self.hits().values() if h["key"] == "WS"], [None, "w-sweep"])
+        # Dead, it leaves; the row is as a dormant one always was.
+        self.put("w-sweep", "WS", None, kind="worker", name="WS work: sweep", state="busy", last_turn_at=self.ago(1))
+        self.assertNotIn("sweep", self.tree(40)); self.assertEqual(self.group_of(self.render("--no-color"), "WS"), "Idle")
+
+    def test_a_worker_with_no_head_row_stands_alone(self):
+        # No charter and no active session: nothing to nest under, so it is drawn as every session was, by its key.
+        self.put("w-lone", "LONE", self.me(), kind="worker", name="LONE work: x")
+        row = next(l for l in self.tree(40).splitlines() if " LONE " in l)
+        self.assertTrue(row.startswith("  ○ LONE"), row); self.assertEqual(self.group_of(self.render("--no-color"), "LONE"), "Unassigned")
+        (hit,) = [h for h in self.hits().values() if h["key"] == "LONE"]; self.assertEqual(hit["worker"], "LONE work: x")
+
+    def test_a_workers_reply_is_read_by_opening_it_and_never_by_opening_its_workstream(self):
+        me, now = self.me(), time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()); self.write_charter("WS")
+        reply = dict(state="waiting", waiting_for="replied", last_turn_at=now)
+        self.put("a-full", "WS", me, **reply); self.put("w-sweep", "WS", me, kind="worker", name="WS work: sweep", **reply)
+        labels = lambda: [l.split()[-1] for l in self.tree(40).splitlines() if l.startswith("  ") and ("WS " in l or "sweep" in l)]
+        self.assertEqual(labels(), ["unread", "unread"])
+        (self.board / "open.json").write_text(json.dumps({"open": "WS", "seen": {"WS": now}}))   # keyed by the workstream, as a file written before workers is
+        self.assertEqual(labels(), ["read", "unread"])
+        (self.board / "open.json").write_text(json.dumps({"open": "w-sweep", "title": "WS work: sweep", "seen": {}}))
+        self.assertEqual(labels(), ["unread", "read"])
+        (self.board / "open.json").write_text(json.dumps({"open": None, "seen": {"w-sweep": now}}))
+        self.assertEqual(labels(), ["unread", "read"])
+
+    def test_the_open_marker_and_the_panel_follow_the_session_in_the_right_pane(self):
+        self.with_workers()
+        bars = lambda: [l for l in self.tree(40).splitlines() if "▌" in l]
+        (self.board / "open.json").write_text(json.dumps({"open": "w-sweep", "title": "WS work: sweep", "seen": {}}))
+        self.panes("%1\t", "%2\tWS")   # the pane titles the workstream's head: the worker is not what it shows
+        self.assertEqual(bars(), [])
+        self.panes("%1\t", "%2\tWS work: sweep"); (row,) = bars()
+        self.assertTrue(row.startswith("▌   └▶ sweep"), row)   # the worker's row alone
+        (self.board / "open.json").write_text(json.dumps({"open": "WS", "seen": {}})); self.panes("%1\t", "%2\tWS")
+        (row,) = bars(); self.assertTrue(row.startswith("▌ ▶ WS"), row)   # the head alone
+        from unittest import mock
+        with mock.patch.dict(os.environ, self.env):   # a worker open shows its workstream's panel, and the key row's click pins that workstream
+            mod = self.module(); hits = {}; text = mod.tree(mod.load_records(), width=40, hits=hits, current="w-sweep", height=60)
+        self.assertIn("☆ WS", text); self.assertEqual([h["key"] for h in hits.values() if "pin" in h], ["WS"])
+
+    def test_option_e_notes_the_workstream_of_the_worker_open(self):
+        self.with_workers()
+        (self.board / "open.json").write_text(json.dumps({"open": "w-sweep", "title": "WS work: sweep", "seen": {}}))
+        (call,) = self.press("note", "/dev/ttys042", "%9", title="WS work: sweep")
+        self.assertEqual(call.split("|")[:8], ["command-prompt", "-b", "-l", "-t", "/dev/ttys042", "-p", "note for WS: ", "-I"])
+
+    def test_opening_a_worker_marks_it_open_by_its_name_and_leaving_it_marks_it_seen(self):
+        me = self.with_workers(); parent = os.getppid()
+        (Path(self.home) / ".claude" / "sessions" / f"{me}.json").write_text(json.dumps({"pid": me, "sessionId": "w-sweep", "kind": "bg", "jobId": "w-sweep"}))
+        self.live("a-full", "WS", parent)
+        entry = lambda **kw: {"key": "WS", "session_id": "w-sweep", "glyph": "▶"} | kw
+        (self.board / "tree-rows.json").write_text(json.dumps({"2": entry(worker="WS work: sweep"), "3": entry(session_id="a-full")}))
+        self.open_line(2); opened = json.loads((self.board / "open.json").read_text())
+        self.assertEqual((opened["open"], opened["title"], sorted(opened["seen"])), ("w-sweep", "WS work: sweep", ["w-sweep"]))
+        self.open_line(3); opened = json.loads((self.board / "open.json").read_text())   # the head, a stop of its own: no title of its own
+        self.assertEqual((opened["open"], "title" in opened, sorted(opened["seen"])), ("WS", False, ["WS", "w-sweep"]))
+
+    def test_each_session_of_a_workstream_is_a_stop_of_a_step_and_the_menu(self):
+        self.write_charter("ALPHA"); self.write_charter("CHARLIE"); worker = "ALPHA work: sweep"
+        self.live("s-alpha-full", "ALPHA", os.getpid()); self.live("w-alpha-full", "ALPHA", os.getppid(), name=worker, kind="worker")
+        self.live("s-charlie-full", "CHARLIE", 1); self.hits()
+        attach = lambda key, job: self.attached(key, job)
+        self.open_now("ALPHA")   # the head is open: next is its worker, then back to the head
+        self.assertEqual(self.press("go", "next", "%9", title="ALPHA"), attach(worker, "w-alpha-"))
+        opened = json.loads((self.board / "open.json").read_text()); self.assertEqual((opened["open"], opened["title"]), ("w-alpha-full", worker))
+        self.assertEqual(self.press("go", "next", "%9", title=worker), attach("CHARLIE", "s-charli"))   # on from the worker, not back to the top
+        self.assertEqual(self.press("go", "prev", "%9", title="CHARLIE"), attach(worker, "w-alpha-"))
+        (call,) = self.press("menu", "/dev/ttys042", "%9", title=worker)
+        flags, items = self.menu_items(call, 4)
+        self.assertEqual(([n for n, *_ in items], flags[-2:]), (["◆ control", "○ ALPHA", f"○ {worker}", "○ CHARLIE"], ["-C", "2"]))   # the choice starts on the open worker
+
+    def test_a_worker_nests_under_the_first_head_after_its_sub_agents(self):
+        # A key with no charter but an active session still nests its worker; of two heads it takes the first; its branch follows the sub-agents'.
+        me = self.me()
+        self.put("a1", "loose", me, children=[{"agent_id": "k1", "name": "Explore", "state": "running"}]); self.put("a2", "loose", me)
+        self.put("w1", "loose", me, kind="worker", name="loose work: x")
+        lines = self.tree(40).splitlines(); i = next(n for n, l in enumerate(lines) if l.startswith("  ▶ loose!"))
+        self.assertEqual([l[:7] for l in lines[i + 1:i + 3]], ["  │ ├ E", "  │ └○ "])
+        self.assertTrue(lines[i + 3].startswith("  ○ loose!"), lines[i + 3])
+        self.assertEqual(sum("worker" in h for h in self.hits().values()), 1)
+
+    def test_a_worker_shows_its_own_state_under_a_block_and_a_finished_charter(self):
+        me = self.me(); self.write_charter("BLK", extra="blocked: PR #12\n")
+        self.put("a1", "BLK", me); self.put("w1", "BLK", me, kind="worker", name="BLK work: x")
+        self.finished("FIN"); self.live("w-fin-full", "FIN", self.pid(), kind="worker", name="FIN work: y")
+        lines = self.tree(40).splitlines()
+        for key, head in (("BLK", "PR #12"), ("FIN", "done")):
+            i = next(n for n, l in enumerate(lines) if l.startswith("  ") and f" {key} " in l)
+            self.assertTrue(lines[i].rstrip().endswith(head), lines[i]); self.assertTrue(lines[i + 1].rstrip().endswith("no turn"), lines[i + 1])
+
+    def test_a_worker_standing_alone_is_open_by_its_own_session(self):
+        self.put("w-lone", "LONE", self.me(), kind="worker", name="LONE work: x")
+        (self.board / "open.json").write_text(json.dumps({"open": "w-lone", "title": "LONE work: x", "seen": {}}))
+        self.panes("%1\t", "%2\tLONE work: x")
+        (row,) = [l for l in self.tree(40).splitlines() if "▌" in l]; self.assertTrue(row.startswith("▌ ○ LONE"), row)
 
     def test_the_plugin_declares_no_settings_hooks_and_loads_the_mod(self):
         root = HOOK.parents[1]
