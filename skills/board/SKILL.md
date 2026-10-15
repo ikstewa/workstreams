@@ -25,6 +25,7 @@ Template (groups in the render's order, Control, Pinned, Active, Blocked, Idle, 
   - likely: <KEY> (unassigned rows the render hints only)
   - last: <last message>
   - ↳ <child type> `<id8>` · <state>
+  - ↳ worker <name> `<id8>` · <state> · <repo/branch, when known> (a live worker, under its workstream's row)
   - …
 …
 
