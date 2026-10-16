@@ -2163,7 +2163,7 @@ class BoardTest(unittest.TestCase):
         root = Path(os.path.realpath(self.home)) / "proj"; wt = root / ".worktrees" / "web-app" / "X" / "y"; wt.mkdir(parents=True)
         ws = Path(self.home) / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(root)) / "workstreams"; ws.mkdir(parents=True)
         (ws / "PAYMENTS_API.md").write_text("---\nworkstream: PAYMENTS_API\n---\nHandoff.\n")
-        h = self.home
+        h = self.home; self.board = ws.parent / "board"   # where board.py reads records from here, for put()
         (self.bin / "claude").write_text(f"#!/bin/sh\npwd > {h}/claude.cwd\nprintf '%s\\n' \"$@\" > {h}/claude.argv\nprintf '%s' \"${{CLAUDE_PROJECT_DIR-unset}}\" > {h}/claude.env\n"
                                          f"printf 'backgrounded · \\033[36m9d9d9d9d\\033[39m · x\\n'\n"); (self.bin / "claude").chmod(0o755)
         return root, wt, {**self.env, "CLAUDE_PROJECT_DIR": str(wt)}
@@ -2195,6 +2195,22 @@ class BoardTest(unittest.TestCase):
         for out, why in (("", "it printed nothing"), ("Error: not logged in", "Error: not logged in")):   # no id: never a guessed one
             (self.bin / "claude").write_text(f"#!/bin/sh\nprintf '%s' '{out}'\n"); (self.bin / "claude").chmod(0o755)
             self.assertEqual(self.start_worker(env, wt, task="x", prompt="p"), {"error": f"claude --bg started nothing: {why}"})
+
+    def test_the_worker_tool_stops_only_its_own_workers(self):
+        root, wt, env = self.worker_home()
+        self.put("w-mine-1", "PAYMENTS_API", None, kind="worker", name="PAYMENTS_API work: a"); self.put("w-mine-2", "PAYMENTS_API", None, kind="worker", name="PAYMENTS_API work: b")
+        self.put("w-other", "OTHER", None, kind="worker", name="OTHER work: a"); self.put("a-active", "PAYMENTS_API", None)
+        for stop in ("w-other", "a-active", "w-nope", "w-mine", "", "../x"):   # another workstream's, not a worker, unknown, an ambiguous prefix, nothing
+            said = self.start_worker(env, wt, stop=stop)
+            self.assertIn("is not the id of exactly one worker of PAYMENTS_API", said["error"], stop)
+        self.assertEqual(self.start_worker(env, wt, stop="w-mine-1", task="x", prompt="p"), {"error": "give task and prompt to start a worker, or stop to stop one, not both"})
+        self.assertFalse((Path(self.home) / "claude.argv").exists())   # none of them reached claude
+
+    def test_the_worker_tool_stops_a_worker_by_a_prefix_of_its_id(self):
+        root, wt, env = self.worker_home()
+        self.put("w-mine-1", "PAYMENTS_API", None, kind="worker", name="PAYMENTS_API work: a")
+        self.assertEqual(self.start_worker(env, wt, stop="w-mi"), {"ok": True, "summary": 'stopped "PAYMENTS_API work: a"'})
+        self.assertEqual((Path(self.home) / "claude.argv").read_text().splitlines(), ["stop", "w-mine-1"])
 
     def test_a_claude_that_hangs_or_is_missing_is_refused_with_why(self):
         from unittest import mock
@@ -2291,13 +2307,27 @@ class BoardTest(unittest.TestCase):
         reply = dict(state="waiting", waiting_for="replied", last_turn_at=now)
         self.put("a-full", "WS", me, **reply); self.put("w-sweep", "WS", me, kind="worker", name="WS work: sweep", **reply)
         labels = lambda: [l.split()[-1] for l in self.tree(40).splitlines() if l.startswith("  ") and ("WS " in l or "sweep" in l)]
-        self.assertEqual(labels(), ["unread", "unread"])
+        self.assertEqual(labels(), ["unread", "replied"])
         (self.board / "open.json").write_text(json.dumps({"open": "WS", "seen": {"WS": now}}))   # keyed by the workstream, as a file written before workers is
-        self.assertEqual(labels(), ["read", "unread"])
+        self.assertEqual(labels(), ["read", "replied"])
         (self.board / "open.json").write_text(json.dumps({"open": "w-sweep", "title": "WS work: sweep", "seen": {}}))
-        self.assertEqual(labels(), ["unread", "read"])
+        self.assertEqual(labels(), ["unread", "replied"])
         (self.board / "open.json").write_text(json.dumps({"open": None, "seen": {"w-sweep": now}}))
-        self.assertEqual(labels(), ["unread", "read"])
+        self.assertEqual(labels(), ["unread", "replied"])
+        # the colour still tells unread from read: yellow, then dim
+        colour = lambda: [l for l in self.tree(40, "--color").splitlines() if "sweep" in l][0]
+        self.assertIn("\033[2;33m", colour())
+        (self.board / "open.json").write_text(json.dumps({"open": None, "seen": {}}))
+        self.assertIn("\033[33m", colour())
+
+    def test_a_replied_worker_reads_replied_never_its_workstreams_goals(self):
+        me = self.me(); self.write_charter("WS", extra=self.GOALS)
+        reply = dict(state="waiting", waiting_for="replied", last_turn_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        self.put("a-full", "WS", me, **reply); self.put("w-sweep", "WS", me, kind="worker", name="WS work: sweep", **reply)
+        lines = self.tree(40).splitlines()
+        self.assertTrue(next(l for l in lines if l.startswith("  ") and " WS " in l).endswith("goals left"), lines)   # the active session keeps them
+        self.assertTrue(next(l for l in lines if "sweep" in l).endswith("replied"), lines)
+        self.assertIn("waiting · replied", self.render("--no-color"))
 
     def test_the_open_marker_and_the_panel_follow_the_session_in_the_right_pane(self):
         self.with_workers()

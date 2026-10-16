@@ -647,7 +647,7 @@
             <h4>Built</h4>
             <ul>
               <li>Charter frontmatter on the per-workstream record, moved out of <code>memory/</code>.</li>
-              <li>One mod: the charter as a row of the bound session's conversation, at start, after <code>/clear</code> and after a compaction; the charter tool, the bound session's one way to write its charter; the worker tool, its one way to start a worker, and the brief a worker reads; goal sync with the task list; and every session's board record, from the engine's own session, turn, tool and sub-agent events.</li>
+              <li>One mod: the charter as a row of the bound session's conversation, at start, after <code>/clear</code> and after a compaction; the charter tool, the bound session's one way to write its charter; the worker tool, its one way to start and stop a worker, and the brief a worker reads; goal sync with the task list; and every session's board record, from the engine's own session, turn, tool and sub-agent events.</li>
               <li>One hook: the record's state machine the mod drives, the charter writes and goal sync it runs under one lock, the record-sync hold, the board render the skill prints, and the sidebar click that reopens or resets a row's session.</li>
               <li>One skill: prints the hook's board render, then ranking, charter interview, dispatch, stop and sweep.</li>
               <li>A statusline count of sessions waiting with a live process behind them, and the statusline writing context size back to the record.</li>
@@ -885,6 +885,7 @@
           <ul>
             <li>Work through sub-agents and workers; hold coordination only.</li>
             <li>For work in several repos or worktrees at once, launch one worker per repo or worktree with the worker tool, never <code>claude --bg</code> directly; each worker enters its own worktree and messages the session when done.</li>
+            <li>When a worker reports, confirm you have what you needed from it, then stop it with the worker tool; until then, reply to it.</li>
             <li>Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the charter tool, never by editing the file.</li>
             <li>Keep the charter's goals current: completing a goal's task ticks it, and new work becomes a new goal through the tool.</li>
             <li>When starting on a goal, set its task to in progress. Claude Code opens the task panel only on the session's own task
@@ -951,6 +952,12 @@
             --permission-mode auto &lt;prompt&gt;</code> from the project root, never from the session's cwd, which may be a worktree.
             The call returns the worker's name and id, or an error that says why. Work in several repos or worktrees at once runs as one
             worker for each: every worker starts at the project root and enters its own worktree.
+          </p>
+          <p>
+            <strong>The active session stops its workers.</strong> A call with <code>stop</code>, a worker's id or an unambiguous prefix of it,
+            in place of <code>task</code> and <code>prompt</code>, runs <code>claude stop</code> for that worker. Only a worker of the caller's
+            own workstream can be named. The rules tell the session to stop a worker once it has reported and the session has what it needed,
+            and to reply to it until then, so a live worker row always means unfinished work.
           </p>
           <p>
             <strong>A worker reads a short brief and nothing more.</strong> Where an active session reads its charter, a worker of a
@@ -1028,7 +1035,8 @@
             workstream with a worker that is working or asking Ian sits in Active, as it would with such a session of its own. A
             worker never counts toward <code>[duplicate]</code> and never carries <code>↻</code>, and its sub-agents are not drawn.
             A worker of a key with no charter and no active session is drawn as a row of its own, by its key. The wide board lists
-            a worker under its workstream's row, labelled with its full name.
+            a worker under its workstream's row, labelled with its full name. A worker's reply reads <code>replied</code>, not the
+            workstream's goals left, in the yellow and dim of an unread and a read reply.
           </p>
           <p>
             <strong>Pinned is the first group, after Control, and holds what Ian pinned.</strong> A charter with a
