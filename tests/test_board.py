@@ -2330,6 +2330,13 @@ class BoardTest(unittest.TestCase):
         self.assertEqual([l.split()[:3] for l in wide if l.startswith("    ")], [["WS", "work:", "audit"], ["WS", "work:", "sweep"]])
         self.assertTrue(next(l for l in wide if l.startswith("    WS work: sweep")).endswith("web-app/X/y"))
 
+    def test_an_open_worker_row_fits_the_width_in_colour(self):
+        # A worker's name has no colour of its own: the bar's bold must not become "\x1b[1;Nonem", which a terminal ends at the N
+        self.with_workers(); self.panes("%1\t", "%2\tWS work: sweep")
+        (self.board / "open.json").write_text(json.dumps({"open": "w-sweep", "title": "WS work: sweep", "seen": {}}))
+        row = next(l for l in self.tree(40, "--color").splitlines() if "▌" in l)
+        self.assertEqual(len(re.sub(r"\x1b\[[0-9;]*m", "", row)), 40, repr(row))
+
     def test_a_click_on_a_worker_row_attaches_its_session(self):
         me = self.with_workers()
         (Path(self.home) / ".claude" / "sessions" / f"{me}.json").write_text(json.dumps({"pid": me, "sessionId": "w-sweep", "kind": "bg", "jobId": "w-sweep"}))
