@@ -2286,6 +2286,11 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(calls, ["claude stop w-mine-1", "claude rm w-mine-1", "claude rm w-mine-1"])
         self.assertFalse(wt.exists()); self.assertEqual(self.branches(), ["master"])
 
+    def test_close_takes_the_branch_from_git_when_the_record_has_none(self):
+        # a worktree path with no <repo>/<branch> shape leaves the record's branch empty
+        said, calls, wt = self.close_worker(rm_code=1, rm_out=self.HOOKED, branch=None, git={})
+        self.assertEqual(said["ok"], True); self.assertFalse(wt.exists()); self.assertEqual(self.branches(), ["master"])
+
     def test_close_removes_a_hook_made_worktree_whose_pr_merged(self):
         said, calls, wt = self.close_worker(rm_code=1, rm_out=self.HOOKED, merged=1, git={"commit": True})
         self.assertEqual(said["ok"], True); self.assertEqual(len([c for c in calls if c.startswith("gh")]), 1)
