@@ -885,7 +885,7 @@
           <ul>
             <li>Work through sub-agents and workers; hold coordination only.</li>
             <li>For work in several repos or worktrees at once, launch one worker per repo or worktree with the worker tool, never <code>claude --bg</code> directly; each worker enters its own worktree and messages the session when done.</li>
-            <li>When a worker reports, confirm you have what you needed from it, then stop it with the worker tool; until then, reply to it.</li>
+            <li>When a worker reports, confirm you have what you needed from it, then close it with the worker tool; until then, reply to it.</li>
             <li>Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the charter tool, never by editing the file.</li>
             <li>Keep the charter's goals current: completing a goal's task ticks it, and new work becomes a new goal through the tool.</li>
             <li>When starting on a goal, set its task to in progress. Claude Code opens the task panel only on the session's own task
@@ -954,9 +954,12 @@
             worker for each: every worker starts at the project root and enters its own worktree.
           </p>
           <p>
-            <strong>The active session stops its workers.</strong> A call with <code>stop</code>, a worker's id or an unambiguous prefix of it,
-            in place of <code>task</code> and <code>prompt</code>, runs <code>claude stop</code> for that worker. Only a worker of the caller's
-            own workstream can be named. The rules tell the session to stop a worker once it has reported and the session has what it needed,
+            <strong>The active session closes its workers.</strong> A call with <code>close</code>, a worker's id or an unambiguous prefix of it,
+            in place of <code>task</code> and <code>prompt</code>, runs <code>claude stop</code> and then <code>claude rm</code> for that worker: the session ends,
+            and it and its worktree are deleted. A closed worker cannot be reopened. Only a worker of the caller's
+            own workstream can be named. When <code>claude rm</code> refuses because the worktree's commits are on no remote, the commits are discarded
+            only if the worker's branch has a merged pull request, since a squash merge and a deleted branch leave every worker looking unpushed;
+            otherwise the worker stays stopped and the call says why. The rules tell the session to close a worker once it has reported and the session has what it needed,
             and to reply to it until then, so a live worker row always means unfinished work.
           </p>
           <p>

@@ -274,23 +274,33 @@ def launch(name, args, timeout, **kw):
 def worker(sid, req):
     """`board.py worker <session-id>`, the mod's worker tool: `claude --bg` for a worker named "<KEY> work: <task>" from the project root,
     not the session's cwd, which may be a worktree; as {ok, summary}, or {error}. The worker enters its own worktree.
-    With {stop: <id or unambiguous prefix>} instead: `claude stop` for one of the caller's own workers."""
+    With {close: <id or unambiguous prefix>} instead: `claude stop` then `claude rm` for one of the caller's own workers. rm keeps a worktree whose commits are on no remote,
+    which a merged PR (squashed, its branch deleted) leaves behind, so it is discarded only when the worker's branch has a merged PR."""
     import subprocess
-    if req.get("stop") is not None:
-        stop = req["stop"]
-        if req.get("task") is not None or req.get("prompt") is not None: return {"error": "give task and prompt to start a worker, or stop to stop one, not both"}
+    if req.get("close") is not None:
+        close = req["close"]
+        if req.get("task") is not None or req.get("prompt") is not None: return {"error": "give task and prompt to start a worker, or close to close one, not both"}
         if not (b := bound(sid)): return {"error": "this session is not bound to a workstream"}
-        mine = [r for p in board_dir().glob(f"{stop}*.json") if isinstance(stop, str) and re.fullmatch(r"[\w-]+", stop)
+        mine = [r for p in board_dir().glob(f"{close}*.json") if isinstance(close, str) and re.fullmatch(r"[\w-]+", close)
                 and (r := load_record(p.stem)) and r.get("kind") == "worker" and r.get("workstream") == b[0]["workstream"]]
-        if len(mine) != 1: return {"error": f"{stop} is not the id of exactly one worker of {b[0]['workstream']}"}
-        try: subprocess.run(["claude", "stop", mine[0]["session_id"]], capture_output=True, timeout=6, check=True)   # under the mod's 8 s run limit
-        except (OSError, subprocess.SubprocessError) as err: return {"error": f"claude stop failed: {err}"}
-        return {"ok": True, "summary": f'stopped "{mine[0]["name"]}"'}
+        if len(mine) != 1: return {"error": f"{close} is not the id of exactly one worker of {b[0]['workstream']}"}
+        rec = mine[0]; job = job_of(rec["session_id"], reg_of(rec.get("pid")))
+        def run(*argv, **kw):   # a step takes under 1 s; four at 5 s are under the mod's 25 s run limit
+            p = subprocess.run(argv, capture_output=True, text=True, timeout=5, **kw); return p.returncode, ANSI.sub("", p.stdout + p.stderr)
+        try:
+            run("claude", "stop", job)   # fails on an exited session, which rm still removes
+            code, out = run("claude", "rm", job)
+            if (m := re.search(r"--discard-unpushed (\S+)", out)):
+                n = run("gh", "pr", "list", "--head", rec["branch"], "--state", "merged", "--json", "number", "--jq", "length", cwd=rec.get("cwd")) if rec.get("branch") else (1, "")
+                if n[0] or not n[1].strip().isdigit() or not int(n[1]): return {"error": f'"{rec["name"]}" is stopped but kept: its commits are on no remote and its PR has not merged'}
+                code, out = run("claude", "rm", job, "--discard-unpushed", m.group(1))
+        except (OSError, subprocess.SubprocessError) as err: return {"error": f"closing failed: {err}"}
+        return {"error": f"claude rm failed: {oneline(out)}"} if code else {"ok": True, "summary": f'closed "{rec["name"]}"'}
     if not all(isinstance(req.get(k), str) and req[k].strip() for k in ("task", "prompt")): return {"error": "task and prompt must be text"}
     if not (b := bound(sid)): return {"error": "this session is not bound to a workstream"}
     name = f"{b[0]['workstream']} work: {' '.join(req['task'].split())}"
     env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}   # the worker is not a session of the cwd this ran in
-    # ponytail: the 6 s bound sits under the mod's 8 s run limit, so a hung claude reaches the model as its why
+    # ponytail: the 6 s bound sits under the mod's run limit, so a hung claude reaches the model as its why
     try: wid, why = launch(name, ["--permission-mode", "auto", req["prompt"]], 6, cwd=project_root(), env=env)
     except (OSError, subprocess.TimeoutExpired) as err: return {"error": f"claude --bg failed: {err}"}
     return {"ok": True, "summary": f'started "{name}", id {wid}'} if wid else {"error": f"claude --bg started nothing: {why or 'it printed nothing'}"}
@@ -298,7 +308,7 @@ def worker(sid, req):
 BOUND_RULES = ("You are the active session for this workstream. Work through sub-agents and workers; hold coordination only. "
                "For work in several repos or worktrees at once, launch one worker per repo or worktree with the mcp__workstreams__worker tool "
                "(load it with ToolSearch first), never `claude --bg` yourself; each worker enters its own worktree and messages you when done. "
-               "When a worker reports, confirm you have what you needed from it, then stop it with the same tool; until then, reply to it. "
+               "When a worker reports, confirm you have what you needed from it, then close it with the same tool; until then, reply to it. "
                "Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the mcp__workstreams__charter tool: "
                "load it with ToolSearch first, and never edit the charter file. "
                "A record entry is one or two lines: what changed and what is next. Cite Ian's decisions by date and a few words, never quote him at length, "
@@ -316,7 +326,7 @@ BOUND_RULES = ("You are the active session for this workstream. Work through sub
 
 WORKER_BRIEF = ("# Workstream charter (worker of {key})\n\n"
                 "You are a worker of workstream {key}. You start at the project root: enter your own worktree before you edit anything. "
-                "When you finish, or are stuck on something only the active session can resolve, send it a message with SendMessage addressed to {key}. The active session stops you once it has what it needs from you. "
+                "When you finish, or are stuck on something only the active session can resolve, send it a message with SendMessage addressed to {key}. The active session closes you once it has what it needs from you. "
                 "The workstream is private to this machine: never mention it, its charter, goals, record or block in anything that leaves the machine, "
                 "such as a commit message, a PR title or description, a ticket, a comment or a document. State what the work is for in its own terms.")
 
@@ -381,6 +391,10 @@ def reg_of(pid):
     try: reg = json.loads((Path.home() / ".claude" / "sessions" / f"{pid}.json").read_text())
     except (OSError, ValueError): return None
     return reg if isinstance(reg, dict) else None
+
+def job_of(sid, reg):
+    """What `claude attach` and `claude stop` take: the short job id; the full session id is "no job matching"."""
+    return reg.get("jobId") if reg and reg.get("sessionId") == sid and reg.get("jobId") else sid[:8]
 
 def running(r):
     return any(c.get("state") == "running" for c in r.get("children") or [])
@@ -753,7 +767,7 @@ def decide(entry, reg, rec=None, x=None, rows=dict):
     # attach revives a retired background session under the same session id, transcript and all
     if not live: return ("attach", sid[:8]) if rows().get(sid, {}).get("kind") == "background" else ("message", f"{entry['key']}: session has ended")
     if reg.get("kind") != "bg": return ("message", f"{entry['key']}: interactive in another terminal, can't attach here")
-    job = reg.get("jobId") or sid[:8]   # attach takes the short job id; the full session id is "no job matching"
+    job = job_of(sid, reg)
     rec = (rec or {}) | {"session_id": sid}
     busy = working(rec)   # mid-turn, or a sub-agent running: never killed
     if control and not busy and (hours_since(rec.get("last_turn_at")) or 0) > COLD_HOURS: return ("restart", job)
