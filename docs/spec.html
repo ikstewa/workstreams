@@ -957,9 +957,10 @@
             <strong>The active session closes its workers.</strong> A call with <code>close</code>, a worker's id or an unambiguous prefix of it,
             in place of <code>task</code> and <code>prompt</code>, runs <code>claude stop</code> and then <code>claude rm</code> for that worker: the session ends,
             and it and its worktree are deleted. A closed worker cannot be reopened. Only a worker of the caller's
-            own workstream can be named. When <code>claude rm</code> refuses because the worktree's commits are on no remote, the commits are discarded
-            only if the worker's branch has a merged pull request, since a squash merge and a deleted branch leave every worker looking unpushed;
-            otherwise the worker stays stopped and the call says why. The rules tell the session to close a worker once it has reported and the session has what it needed,
+            own workstream can be named. When <code>claude rm</code> keeps the worktree, because its commits are on no remote or because a project hook made it,
+            the worktree is removed only if the worker's <code>HEAD</code> is on <code>origin/master</code> or <code>origin/main</code> or its branch has a merged pull request,
+            since a squash merge and a deleted branch leave every worker looking unpushed. A hook-made worktree is also removed only when clean.
+            Otherwise the worker stays stopped and the call says why. A closed worker's local branch is deleted. The rules tell the session to close a worker once it has reported and the session has what it needed,
             and to reply to it until then, so a live worker row always means unfinished work.
           </p>
           <p>
