@@ -1,7 +1,7 @@
 import type { ApiMessage, EngineInterface, Register, ToolCallResult, ToolSpec } from 'claude-code'
 
 // A bound session's charter, as a user row of its conversation; the charter tool, its one way to write that charter; the worker tool,
-// its one way to start a worker session; a worker's brief; its goals kept in step with its task list; and every session's board record.
+// its one way to start and stop a worker session; a worker's brief; its goals kept in step with its task list; and every session's board record.
 // board.py builds the text, makes the writes and keeps the record's state machine; this module decides when each runs and forwards the events the record moves on.
 // Every $-taking helper is a top-level function: the validator lets $ into no other.
 
@@ -52,10 +52,12 @@ const WORKER: ToolSpec = {
   description: [
     'Starts a worker of your workstream: a background session named "<KEY> work: <task>", launched from the project root. ' +
       'The worker enters its own worktree and messages you when it finishes. Start one worker for each repo or worktree. Do not run claude --bg yourself.',
+    'Or, with stop, stops one of your workers once it has reported and you have what you needed from it.',
     '',
-    'The result has the name and the id of the worker. If the tool refuses a call, the error says why.',
+    'Give task and prompt to start a worker, or stop to stop one, never both. The result has the name and the id of the worker. If the tool refuses a call, the error says why.',
     '- task: A short label for the work. It becomes the part of the name after "work: ".',
     '- prompt: The worker\'s brief. The worker does not see this conversation: say what to do, in which repo, and what to report.',
+    '- stop: The id of the worker to stop, as the start result printed it.',
     '',
     'Only the main session can use this tool. A sub-agent cannot.',
   ].join('\n'),
@@ -64,8 +66,8 @@ const WORKER: ToolSpec = {
     properties: {
       task: { type: 'string', description: 'A short label for the work.' },
       prompt: { type: 'string', description: 'The worker\'s brief.' },
+      stop: { type: 'string', description: 'The id of the worker to stop.' },
     },
-    required: ['task', 'prompt'],
     additionalProperties: false,
   },
 }
@@ -376,7 +378,7 @@ export const register: Register = on => {
   // The worker tool, answered the same way. board.py runs `claude --bg` from the project root, which returns at once and is cut off at 6 s.
   on('tool.call', { tool: WORKER_TOOL }, async ($, e) => {
     if (e.agentId !== undefined) return { deny: 'only the main session starts a worker' }
-    const fields = { task: e.task, prompt: e.prompt }
+    const fields = { task: e.task, prompt: e.prompt, stop: e.stop }
     return answer(await queue($, st, { cmd: 'worker', stdin: () => JSON.stringify(fields), timeoutMs: 8_000, what: 'worker not started' }),
       { failed: 'the worker was not started', json: 'the worker launch answered no JSON' })
   })

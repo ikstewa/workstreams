@@ -273,8 +273,19 @@ def launch(name, args, timeout, **kw):
 
 def worker(sid, req):
     """`board.py worker <session-id>`, the mod's worker tool: `claude --bg` for a worker named "<KEY> work: <task>" from the project root,
-    not the session's cwd, which may be a worktree; as {ok, summary}, or {error}. The worker enters its own worktree."""
+    not the session's cwd, which may be a worktree; as {ok, summary}, or {error}. The worker enters its own worktree.
+    With {stop: <id or unambiguous prefix>} instead: `claude stop` for one of the caller's own workers."""
     import subprocess
+    if req.get("stop") is not None:
+        stop = req["stop"]
+        if req.get("task") is not None or req.get("prompt") is not None: return {"error": "give task and prompt to start a worker, or stop to stop one, not both"}
+        if not (b := bound(sid)): return {"error": "this session is not bound to a workstream"}
+        mine = [r for p in board_dir().glob(f"{stop}*.json") if isinstance(stop, str) and re.fullmatch(r"[\w-]+", stop)
+                and (r := load_record(p.stem)) and r.get("kind") == "worker" and r.get("workstream") == b[0]["workstream"]]
+        if len(mine) != 1: return {"error": f"{stop} is not the id of exactly one worker of {b[0]['workstream']}"}
+        try: subprocess.run(["claude", "stop", mine[0]["session_id"]], capture_output=True, timeout=6, check=True)   # under the mod's 8 s run limit
+        except (OSError, subprocess.SubprocessError) as err: return {"error": f"claude stop failed: {err}"}
+        return {"ok": True, "summary": f'stopped "{mine[0]["name"]}"'}
     if not all(isinstance(req.get(k), str) and req[k].strip() for k in ("task", "prompt")): return {"error": "task and prompt must be text"}
     if not (b := bound(sid)): return {"error": "this session is not bound to a workstream"}
     name = f"{b[0]['workstream']} work: {' '.join(req['task'].split())}"
@@ -287,6 +298,7 @@ def worker(sid, req):
 BOUND_RULES = ("You are the active session for this workstream. Work through sub-agents and workers; hold coordination only. "
                "For work in several repos or worktrees at once, launch one worker per repo or worktree with the mcp__workstreams__worker tool "
                "(load it with ToolSearch first), never `claude --bg` yourself; each worker enters its own worktree and messages you when done. "
+               "When a worker reports, confirm you have what you needed from it, then stop it with the same tool; until then, reply to it. "
                "Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the mcp__workstreams__charter tool: "
                "load it with ToolSearch first, and never edit the charter file. "
                "A record entry is one or two lines: what changed and what is next. Cite Ian's decisions by date and a few words, never quote him at length, "
@@ -304,7 +316,7 @@ BOUND_RULES = ("You are the active session for this workstream. Work through sub
 
 WORKER_BRIEF = ("# Workstream charter (worker of {key})\n\n"
                 "You are a worker of workstream {key}. You start at the project root: enter your own worktree before you edit anything. "
-                "When you finish, or are stuck on something only the active session can resolve, send it a message with SendMessage addressed to {key}. "
+                "When you finish, or are stuck on something only the active session can resolve, send it a message with SendMessage addressed to {key}. The active session stops you once it has what it needs from you. "
                 "The workstream is private to this machine: never mention it, its charter, goals, record or block in anything that leaves the machine, "
                 "such as a commit message, a PR title or description, a ticket, a comment or a document. State what the work is for in its own terms.")
 
@@ -517,7 +529,9 @@ def place(records):
         h = hours_since(r.get("last_turn_at")); cold = (h or 0) > COLD_HOURS; reset = cold and r.get("kind") == "active" and key in chart
         if why := reason(r):
             # yellow: the turn is yours, dim once read; red: a permission, a question or what a listing blocked session waits for
-            if why == "replied": new = unread(key, r); code, why = ("33" if new else "2;33"), turn if new else turn.replace("unread", "read", 1)
+            if why == "replied":
+                if r.get("kind") == "worker": turn = "replied"   # its workstream's goals would read as the workstream's own
+                new = unread(key, r); code, why = ("33" if new else "2;33"), turn if new else turn.replace("unread", "read", 1)
             else: code, reset = "31", False
             ws_h = hours_since(r.get("waiting_since"))
             return f"waiting · {why}" + (f" · {ws_h}h" if ws_h is not None else ""), code, re.sub(r"^(unread|read) · ", "", why), reset   # the tree drops the prefix to fit its state cap

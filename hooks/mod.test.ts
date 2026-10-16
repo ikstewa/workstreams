@@ -705,12 +705,13 @@ test('a worker of a charter key is briefed and offered neither tool; a worker of
   expect(loose.w.rows).toEqual([])
 })
 
-test('the worker tool is a pair of required strings, written as sentences', async () => {
+test('the worker tool is three optional strings, written as sentences', async () => {
   const { w, fire } = harness()
   await fire.start()
   const spec = w.tools.find(t => t.name === 'worker')
-  expect(spec?.inputSchema).toMatchObject({ required: ['task', 'prompt'], additionalProperties: false })
-  expect(Object.keys((spec?.inputSchema as { properties: object }).properties)).toEqual(['task', 'prompt'])
+  expect(spec?.inputSchema).toMatchObject({ additionalProperties: false })
+  expect(spec?.inputSchema).not.toHaveProperty('required')   // board.py checks which of start or stop a call is
+  expect(Object.keys((spec?.inputSchema as { properties: object }).properties)).toEqual(['task', 'prompt', 'stop'])
   expect(spec?.description.split('\n').filter(l => l !== '' && !l.endsWith('.'))).toEqual([])   // no break inside a sentence
 })
 
@@ -720,6 +721,12 @@ test('a worker call queues one launch with its task and prompt, answers with the
   expect(w.launches).toEqual([{ sid: 's1', fields: { task: 'fix', prompt: 'Do it.' }, timeoutMs: 8_000 }])
   expect(w.jobs).toEqual(['worker s1'])
   expect(w.core).toEqual([])
+})
+
+test('a worker call with stop queues it for board.py with the id', async () => {
+  const { w, fire } = harness()
+  await fire.call(WORKER_TOOL, 't1', { stop: '9d9d9d9d' })
+  expect(w.launches).toEqual([{ sid: 's1', fields: { stop: '9d9d9d9d' }, timeoutMs: 8_000 }])
 })
 
 for (const [how, why] of [['sub-agent', 'only the main session starts a worker'], ['error', 'this session is not bound to a workstream'],
