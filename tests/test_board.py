@@ -2224,7 +2224,7 @@ class BoardTest(unittest.TestCase):
     HOOKED = ("kept w-mine-1 \u2014 its worktree is still at \u201c/x\u201d\\n  The worktree has files that weren't checked against a repository "
               "(it has none of its own, or a hook manages it).\\n")
 
-    def git_worktree(self, commit=False, dirty=False):
+    def git_worktree(self, commit=False, dirty=False, other=False):
         """A scratch repo whose origin/master is its first commit, with a linked worktree on b/y at the repo's .worktrees/y; returns (main repo, worktree)."""
         repo = Path(os.path.realpath(self.home)) / "repo"; wt = repo / ".worktrees" / "y"
         def git(*a, cwd=repo): subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True, env={**self.env, "GIT_CONFIG_NOSYSTEM": "1"})
@@ -2232,13 +2232,15 @@ class BoardTest(unittest.TestCase):
         git("worktree", "add", "-q", "-b", "b/y", str(wt))
         if commit: git("commit", "-q", "--allow-empty", "-m", "own", cwd=wt)
         if dirty: (wt / "new.txt").write_text("x")
+        if other: git("branch", "other")
         return repo, wt
 
-    def close_worker(self, rm_code=0, rm_out="", merged=None, branch="b/y", stop_code=0, git=None):
+    def close_worker(self, rm_code=0, rm_out="", merged=None, branch="b/y", stop_code=0, git=None, main=False):
         """Closes w-mine-1 against a fake claude that logs its calls and answers `rm` (the first, without --discard-unpushed) with rm_code and rm_out,
-        and a fake gh that logs its cwd and arguments and answers with `merged` PRs. Returns (said, the calls in order)."""
+        and a fake gh that logs its cwd and arguments and answers with `merged` PRs. main: the record's cwd is the repo's main checkout. Returns (said, the calls in order)."""
         root, wt, env = self.worker_home(); h = self.home
         if git is not None: self.repo, wt = self.git_worktree(**git)
+        if main: wt = self.repo
         self.put("w-mine-1", "PAYMENTS_API", None, kind="worker", name="PAYMENTS_API work: a", branch=branch, cwd=str(wt))
         (self.bin / "claude").write_text(f"#!/bin/sh\necho \"claude $*\" >> {h}/calls\n"
                                          f"[ \"$1\" = stop ] && exit {stop_code}\n"
@@ -2298,6 +2300,11 @@ class BoardTest(unittest.TestCase):
         said, calls, wt = self.close_worker(rm_code=1, rm_out=self.HOOKED, git={"dirty": True})
         self.assertEqual(said, {"error": '"PAYMENTS_API work: a" is stopped but kept: its worktree has uncommitted changes'})
         self.assertTrue(wt.exists()); self.assertEqual(calls.count("claude rm w-mine-1"), 1); self.assertIn("b/y", self.branches())
+
+    def test_close_never_deletes_a_branch_of_a_main_checkout(self):
+        # a record whose cwd is a main checkout, not a worktree the worker entered: its branch is someone's, never the worker's
+        said, calls, _ = self.close_worker(branch="other", git={"other": True}, main=True)
+        self.assertEqual(said["ok"], True); self.assertIn("other", self.branches())
 
     def test_close_keeps_commits_whose_pr_has_not_merged(self): self.kept(merged=0)   # open, or no PR
 

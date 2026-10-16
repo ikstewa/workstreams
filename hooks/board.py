@@ -294,8 +294,10 @@ def worker(sid, req):
             n = run("gh", "pr", "list", "--head", br, "--state", "merged", "--json", "number", "--jq", "length", cwd=wt) if br else (1, "")
             return not n[0] and n[1].strip().isdigit() and int(n[1]) > 0
         try:
-            c = run("git", "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=wt) if wt and os.path.isdir(wt) else (1, "")
-            common = c[1].strip() if not c[0] else None   # the main repo's git dir, found while the worktree exists
+            c = run("git", "rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir", cwd=wt) if wt and os.path.isdir(wt) else (1, "")
+            dirs = c[1].split() if not c[0] else []
+            # the main repo's git dir, found while the worktree exists; none for a main checkout, whose tree and branch close never touches
+            common = dirs[0] if len(dirs) == 2 and dirs[0] != dirs[1] else None
             run("claude", "stop", job)   # fails on an exited session, which rm still removes
             code, out = run("claude", "rm", job)
             m = re.search(r"--discard-unpushed (\S+)", out)
