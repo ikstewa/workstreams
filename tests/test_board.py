@@ -2208,9 +2208,15 @@ class BoardTest(unittest.TestCase):
 
     def test_the_worker_tool_stops_a_worker_by_a_prefix_of_its_id(self):
         root, wt, env = self.worker_home()
-        self.put("w-mine-1", "PAYMENTS_API", None, kind="worker", name="PAYMENTS_API work: a")
+        # claude stop takes the short job id, never the full session id: the registry's jobId while it names this session, else the first 8
+        self.put("w-mine-1-full", "PAYMENTS_API", None, kind="worker", name="PAYMENTS_API work: a")
         self.assertEqual(self.start_worker(env, wt, stop="w-mi"), {"ok": True, "summary": 'stopped "PAYMENTS_API work: a"'})
         self.assertEqual((Path(self.home) / "claude.argv").read_text().splitlines(), ["stop", "w-mine-1"])
+        sessions = Path(self.home) / ".claude" / "sessions"
+        (sessions / "5151.json").write_text(json.dumps({"pid": 5151, "sessionId": "w-mine-1-full", "jobId": "job5151x"}))
+        self.put("w-mine-1-full", "PAYMENTS_API", 5151, kind="worker", name="PAYMENTS_API work: a")
+        self.start_worker(env, wt, stop="w-mine-1-full")
+        self.assertEqual((Path(self.home) / "claude.argv").read_text().splitlines(), ["stop", "job5151x"])
 
     def test_a_claude_that_hangs_or_is_missing_is_refused_with_why(self):
         from unittest import mock

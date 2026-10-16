@@ -283,7 +283,8 @@ def worker(sid, req):
         mine = [r for p in board_dir().glob(f"{stop}*.json") if isinstance(stop, str) and re.fullmatch(r"[\w-]+", stop)
                 and (r := load_record(p.stem)) and r.get("kind") == "worker" and r.get("workstream") == b[0]["workstream"]]
         if len(mine) != 1: return {"error": f"{stop} is not the id of exactly one worker of {b[0]['workstream']}"}
-        try: subprocess.run(["claude", "stop", mine[0]["session_id"]], capture_output=True, timeout=6, check=True)   # under the mod's 8 s run limit
+        job = job_of(mine[0]["session_id"], reg_of(mine[0].get("pid")))
+        try: subprocess.run(["claude", "stop", job], capture_output=True, timeout=6, check=True)   # under the mod's 8 s run limit
         except (OSError, subprocess.SubprocessError) as err: return {"error": f"claude stop failed: {err}"}
         return {"ok": True, "summary": f'stopped "{mine[0]["name"]}"'}
     if not all(isinstance(req.get(k), str) and req[k].strip() for k in ("task", "prompt")): return {"error": "task and prompt must be text"}
@@ -381,6 +382,10 @@ def reg_of(pid):
     try: reg = json.loads((Path.home() / ".claude" / "sessions" / f"{pid}.json").read_text())
     except (OSError, ValueError): return None
     return reg if isinstance(reg, dict) else None
+
+def job_of(sid, reg):
+    """What `claude attach` and `claude stop` take: the short job id; the full session id is "no job matching"."""
+    return reg.get("jobId") if reg and reg.get("sessionId") == sid and reg.get("jobId") else sid[:8]
 
 def running(r):
     return any(c.get("state") == "running" for c in r.get("children") or [])
@@ -753,7 +758,7 @@ def decide(entry, reg, rec=None, x=None, rows=dict):
     # attach revives a retired background session under the same session id, transcript and all
     if not live: return ("attach", sid[:8]) if rows().get(sid, {}).get("kind") == "background" else ("message", f"{entry['key']}: session has ended")
     if reg.get("kind") != "bg": return ("message", f"{entry['key']}: interactive in another terminal, can't attach here")
-    job = reg.get("jobId") or sid[:8]   # attach takes the short job id; the full session id is "no job matching"
+    job = job_of(sid, reg)
     rec = (rec or {}) | {"session_id": sid}
     busy = working(rec)   # mid-turn, or a sub-agent running: never killed
     if control and not busy and (hours_since(rec.get("last_turn_at")) or 0) > COLD_HOURS: return ("restart", job)
