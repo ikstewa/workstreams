@@ -657,7 +657,7 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
     def row(lead, glyph, name, state, code, name_code=None, dup=False, cap=None, on=False):
         # Name truncates with …; state right-aligns to W, capped at a third of it unless `cap` says otherwise. `!` after a key marks [duplicate].
         # `on`: the bar takes column 0 of the lead, so the open row is as wide as any other.
-        lead, lead_code, name_code = ("▌" + lead[1:], "1", f"1;{name_code}") if on else (lead, "2", name_code)
+        lead, lead_code, name_code = ("▌" + lead[1:], "1", f"1;{name_code}" if name_code else "1") if on else (lead, "2", name_code)
         state = oneline(state, cap or W // 3); left = len(lead) + 2
         name = oneline(name, max(W - left - len(state) - 1 - dup, 1)) + "!" * dup
         return f"{C(lead_code, lead)}{C(code, glyph)} {C(name_code, name)}{' ' * (W - left - len(name) - len(state))}{C(code, state)}"
