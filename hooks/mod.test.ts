@@ -718,7 +718,7 @@ test('the worker tool is three optional strings, written as sentences', async ()
 test('a worker call queues one launch with its task and prompt, answers with the worker, and core never runs it', async () => {
   const { w, fire } = harness()
   expect(await fire.call(WORKER_TOOL, 't1', { task: 'fix', prompt: 'Do it.', consent: 'yes' })).toEqual({ result: 'started "PAYMENTS_API work: fix", id 9d9d9d9d' })
-  expect(w.launches).toEqual([{ sid: 's1', fields: { task: 'fix', prompt: 'Do it.' }, timeoutMs: 25_000 }])
+  expect(w.launches).toEqual([{ sid: 's1', fields: { task: 'fix', prompt: 'Do it.' }, timeoutMs: 50_000 }])
   expect(w.jobs).toEqual(['worker s1'])
   expect(w.core).toEqual([])
 })
@@ -726,7 +726,7 @@ test('a worker call queues one launch with its task and prompt, answers with the
 test('a worker call with close queues it for board.py with the id', async () => {
   const { w, fire } = harness()
   await fire.call(WORKER_TOOL, 't1', { close: '9d9d9d9d' })
-  expect(w.launches).toEqual([{ sid: 's1', fields: { close: '9d9d9d9d' }, timeoutMs: 25_000 }])
+  expect(w.launches).toEqual([{ sid: 's1', fields: { close: '9d9d9d9d' }, timeoutMs: 50_000 }])
 })
 
 for (const [how, why] of [['sub-agent', 'only the main session starts a worker'], ['error', 'this session is not bound to a workstream'],

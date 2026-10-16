@@ -52,7 +52,7 @@ const WORKER: ToolSpec = {
   description: [
     'Starts a worker of your workstream: a background session named "<KEY> work: <task>", launched from the project root. ' +
       'The worker enters its own worktree and messages you when it finishes. Start one worker for each repo or worktree. Do not run claude --bg yourself.',
-    'Or, with close, closes one of your workers once it has reported and you have what you needed from it: the session ends, and it and its worktree are deleted. A closed worker cannot be reopened. A worker whose commits are on no remote and whose PR has not merged is stopped but kept.',
+    'Or, with close, closes one of your workers once it has reported and you have what you needed from it: the session ends, and it and its worktree are deleted. A closed worker cannot be reopened. A worker whose changes are uncommitted, or whose commits are neither on the default branch nor in a merged PR, is stopped but kept.',
     '',
     'Give task and prompt to start a worker, or close to close one, never both. The result has the name and the id of the worker. If the tool refuses a call, the error says why.',
     '- task: A short label for the work. It becomes the part of the name after "work: ".',
@@ -379,7 +379,7 @@ export const register: Register = on => {
   on('tool.call', { tool: WORKER_TOOL }, async ($, e) => {
     if (e.agentId !== undefined) return { deny: 'only the main session starts a worker' }
     const fields = { task: e.task, prompt: e.prompt, close: e.close }
-    return answer(await queue($, st, { cmd: 'worker', stdin: () => JSON.stringify(fields), timeoutMs: 25_000, what: 'worker not started' }),
+    return answer(await queue($, st, { cmd: 'worker', stdin: () => JSON.stringify(fields), timeoutMs: 50_000, what: 'worker not started' }),
       { failed: 'the worker was not started', json: 'the worker launch answered no JSON' })
   })
 

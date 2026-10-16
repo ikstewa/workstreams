@@ -2221,13 +2221,28 @@ class BoardTest(unittest.TestCase):
     UNPUSHED = ("kept w-mine-1 \u2014 its worktree is still at \u201c/x\u201d\\n  1 unpushed commit. It exists on no remote.\\n"
                 "  push it, or discard the worktree and its commits: claude rm w-mine-1 --discard-unpushed 5d62@f412\\n")
 
-    def close_worker(self, rm_code=0, rm_out="", merged=None, branch="b/y", stop_code=0):
+    HOOKED = ("kept w-mine-1 \u2014 its worktree is still at \u201c/x\u201d\\n  The worktree has files that weren't checked against a repository "
+              "(it has none of its own, or a hook manages it).\\n")
+
+    def git_worktree(self, commit=False, dirty=False):
+        """A scratch repo whose origin/master is its first commit, with a linked worktree on b/y at the repo's .worktrees/y; returns (main repo, worktree)."""
+        repo = Path(os.path.realpath(self.home)) / "repo"; wt = repo / ".worktrees" / "y"
+        def git(*a, cwd=repo): subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True, env={**self.env, "GIT_CONFIG_NOSYSTEM": "1"})
+        git("init", "-q", "-b", "master", str(repo), cwd=self.home); git("commit", "-q", "--allow-empty", "-m", "base"); git("update-ref", "refs/remotes/origin/master", "HEAD")
+        git("worktree", "add", "-q", "-b", "b/y", str(wt))
+        if commit: git("commit", "-q", "--allow-empty", "-m", "own", cwd=wt)
+        if dirty: (wt / "new.txt").write_text("x")
+        return repo, wt
+
+    def close_worker(self, rm_code=0, rm_out="", merged=None, branch="b/y", stop_code=0, git=None):
         """Closes w-mine-1 against a fake claude that logs its calls and answers `rm` (the first, without --discard-unpushed) with rm_code and rm_out,
         and a fake gh that logs its cwd and arguments and answers with `merged` PRs. Returns (said, the calls in order)."""
         root, wt, env = self.worker_home(); h = self.home
+        if git is not None: self.repo, wt = self.git_worktree(**git)
         self.put("w-mine-1", "PAYMENTS_API", None, kind="worker", name="PAYMENTS_API work: a", branch=branch, cwd=str(wt))
         (self.bin / "claude").write_text(f"#!/bin/sh\necho \"claude $*\" >> {h}/calls\n"
                                          f"[ \"$1\" = stop ] && exit {stop_code}\n"
+                                         f"[ ! -e '{wt}' ] && echo removed && exit 0\n"   # rm succeeds once the worktree is gone
                                          f"case \"$*\" in *--discard-unpushed*) echo removed; exit 0;; esac\n"
                                          f"printf '{rm_out}'; exit {rm_code}\n"); (self.bin / "claude").chmod(0o755)
         (self.bin / "gh").write_text(f"#!/bin/sh\necho \"gh $(pwd) $*\" >> {h}/calls\necho {merged if merged is not None else 0}\n"); (self.bin / "gh").chmod(0o755)
@@ -2253,8 +2268,36 @@ class BoardTest(unittest.TestCase):
 
     def kept(self, **kw):
         said, calls, _ = self.close_worker(rm_code=1, rm_out=self.UNPUSHED, **kw)
-        self.assertEqual(said, {"error": '"PAYMENTS_API work: a" is stopped but kept: its commits are on no remote and its PR has not merged'})
+        self.assertEqual(said, {"error": '"PAYMENTS_API work: a" is stopped but kept: its commits are not on the default branch and have no merged PR'})
         self.assertFalse([c for c in calls if "--discard-unpushed" in c], calls)
+
+    def test_a_discarded_worktree_may_instead_be_on_the_default_branch(self):
+        said, calls, wt = self.close_worker(rm_code=1, rm_out=self.UNPUSHED, git={})
+        self.assertEqual(said["ok"], True); self.assertEqual(calls[-1], "claude rm w-mine-1 --discard-unpushed 5d62@f412")
+        self.assertFalse([c for c in calls if c.startswith("gh")], calls)
+
+    def branches(self): return subprocess.run(["git", "branch", "--format=%(refname:short)"], cwd=self.repo, capture_output=True, text=True).stdout.split()
+
+    def test_close_removes_a_clean_hook_made_worktree_on_the_default_branch(self):
+        said, calls, wt = self.close_worker(rm_code=1, rm_out=self.HOOKED, git={})
+        self.assertEqual(said, {"ok": True, "summary": 'closed "PAYMENTS_API work: a"'})
+        self.assertEqual(calls, ["claude stop w-mine-1", "claude rm w-mine-1", "claude rm w-mine-1"])
+        self.assertFalse(wt.exists()); self.assertEqual(self.branches(), ["master"])
+
+    def test_close_removes_a_hook_made_worktree_whose_pr_merged(self):
+        said, calls, wt = self.close_worker(rm_code=1, rm_out=self.HOOKED, merged=1, git={"commit": True})
+        self.assertEqual(said["ok"], True); self.assertEqual(len([c for c in calls if c.startswith("gh")]), 1)
+        self.assertFalse(wt.exists()); self.assertEqual(self.branches(), ["master"])
+
+    def test_close_keeps_a_hook_made_worktree_with_unlanded_commits(self):
+        said, calls, wt = self.close_worker(rm_code=1, rm_out=self.HOOKED, merged=0, git={"commit": True})
+        self.assertEqual(said, {"error": '"PAYMENTS_API work: a" is stopped but kept: its commits are not on the default branch and have no merged PR'})
+        self.assertTrue(wt.exists()); self.assertEqual(calls.count("claude rm w-mine-1"), 1)
+
+    def test_close_keeps_a_hook_made_worktree_with_uncommitted_changes(self):
+        said, calls, wt = self.close_worker(rm_code=1, rm_out=self.HOOKED, git={"dirty": True})
+        self.assertEqual(said, {"error": '"PAYMENTS_API work: a" is stopped but kept: its worktree has uncommitted changes'})
+        self.assertTrue(wt.exists()); self.assertEqual(calls.count("claude rm w-mine-1"), 1); self.assertIn("b/y", self.branches())
 
     def test_close_keeps_commits_whose_pr_has_not_merged(self): self.kept(merged=0)   # open, or no PR
 

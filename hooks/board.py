@@ -274,8 +274,9 @@ def launch(name, args, timeout, **kw):
 def worker(sid, req):
     """`board.py worker <session-id>`, the mod's worker tool: `claude --bg` for a worker named "<KEY> work: <task>" from the project root,
     not the session's cwd, which may be a worktree; as {ok, summary}, or {error}. The worker enters its own worktree.
-    With {close: <id or unambiguous prefix>} instead: `claude stop` then `claude rm` for one of the caller's own workers. rm keeps a worktree whose commits are on no remote,
-    which a merged PR (squashed, its branch deleted) leaves behind, so it is discarded only when the worker's branch has a merged PR."""
+    With {close: <id or unambiguous prefix>} instead: `claude stop` then `claude rm` for one of the caller's own workers. rm keeps a worktree whose commits are on no remote, which a merged PR
+    (squashed, its branch deleted) leaves behind, and one a hook manages. Either is removed only when the worker's HEAD is on the default branch or its branch has a merged PR;
+    a hook-managed one also only when clean."""
     import subprocess
     if req.get("close") is not None:
         close = req["close"]
@@ -285,17 +286,27 @@ def worker(sid, req):
                 and (r := load_record(p.stem)) and r.get("kind") == "worker" and r.get("workstream") == b[0]["workstream"]]
         if len(mine) != 1: return {"error": f"{close} is not the id of exactly one worker of {b[0]['workstream']}"}
         rec = mine[0]; job = job_of(rec["session_id"], reg_of(rec.get("pid")))
-        def run(*argv, **kw):   # a step takes under 1 s; four at 5 s are under the mod's 25 s run limit
+        def run(*argv, **kw):   # a step takes under 1 s; nine at 5 s are under the mod's 50 s run limit
             p = subprocess.run(argv, capture_output=True, text=True, timeout=5, **kw); return p.returncode, ANSI.sub("", p.stdout + p.stderr)
+        wt, br, name = rec.get("cwd"), rec.get("branch"), rec["name"]
+        def landed():   # no fetch: a stale origin ref still contains the commit the worker was cut from
+            if any(run("git", "merge-base", "--is-ancestor", "HEAD", f"origin/{d}", cwd=wt)[0] == 0 for d in ("master", "main")): return True
+            n = run("gh", "pr", "list", "--head", br, "--state", "merged", "--json", "number", "--jq", "length", cwd=wt) if br else (1, "")
+            return not n[0] and n[1].strip().isdigit() and int(n[1]) > 0
         try:
+            c = run("git", "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=wt) if wt and os.path.isdir(wt) else (1, "")
+            common = c[1].strip() if not c[0] else None   # the main repo's git dir, found while the worktree exists
             run("claude", "stop", job)   # fails on an exited session, which rm still removes
             code, out = run("claude", "rm", job)
-            if (m := re.search(r"--discard-unpushed (\S+)", out)):
-                n = run("gh", "pr", "list", "--head", rec["branch"], "--state", "merged", "--json", "number", "--jq", "length", cwd=rec.get("cwd")) if rec.get("branch") else (1, "")
-                if n[0] or not n[1].strip().isdigit() or not int(n[1]): return {"error": f'"{rec["name"]}" is stopped but kept: its commits are on no remote and its PR has not merged'}
-                code, out = run("claude", "rm", job, "--discard-unpushed", m.group(1))
+            m = re.search(r"--discard-unpushed (\S+)", out)
+            if m or (code and common and "worktree is still at" in out):   # else a hook manages the worktree, which rm will not remove
+                if not landed(): return {"error": f'"{name}" is stopped but kept: its commits are not on the default branch and have no merged PR'}
+                if m: code, out = run("claude", "rm", job, "--discard-unpushed", m.group(1))
+                elif run("git", "-C", common, "worktree", "remove", wt)[0]: return {"error": f'"{name}" is stopped but kept: its worktree has uncommitted changes'}
+                else: code, out = run("claude", "rm", job)
+            if not code and common and br: run("git", "-C", common, "branch", "-D", br)
         except (OSError, subprocess.SubprocessError) as err: return {"error": f"closing failed: {err}"}
-        return {"error": f"claude rm failed: {oneline(out)}"} if code else {"ok": True, "summary": f'closed "{rec["name"]}"'}
+        return {"error": f"claude rm failed: {oneline(out)}"} if code else {"ok": True, "summary": f'closed "{name}"'}
     if not all(isinstance(req.get(k), str) and req[k].strip() for k in ("task", "prompt")): return {"error": "task and prompt must be text"}
     if not (b := bound(sid)): return {"error": "this session is not bound to a workstream"}
     name = f"{b[0]['workstream']} work: {' '.join(req['task'].split())}"
