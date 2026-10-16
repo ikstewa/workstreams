@@ -2196,27 +2196,74 @@ class BoardTest(unittest.TestCase):
             (self.bin / "claude").write_text(f"#!/bin/sh\nprintf '%s' '{out}'\n"); (self.bin / "claude").chmod(0o755)
             self.assertEqual(self.start_worker(env, wt, task="x", prompt="p"), {"error": f"claude --bg started nothing: {why}"})
 
-    def test_the_worker_tool_stops_only_its_own_workers(self):
+    def test_the_worker_tool_closes_only_its_own_workers(self):
         root, wt, env = self.worker_home()
         self.put("w-mine-1", "PAYMENTS_API", None, kind="worker", name="PAYMENTS_API work: a"); self.put("w-mine-2", "PAYMENTS_API", None, kind="worker", name="PAYMENTS_API work: b")
         self.put("w-other", "OTHER", None, kind="worker", name="OTHER work: a"); self.put("a-active", "PAYMENTS_API", None)
-        for stop in ("w-other", "a-active", "w-nope", "w-mine", "", "../x"):   # another workstream's, not a worker, unknown, an ambiguous prefix, nothing
-            said = self.start_worker(env, wt, stop=stop)
-            self.assertIn("is not the id of exactly one worker of PAYMENTS_API", said["error"], stop)
-        self.assertEqual(self.start_worker(env, wt, stop="w-mine-1", task="x", prompt="p"), {"error": "give task and prompt to start a worker, or stop to stop one, not both"})
+        for close in ("w-other", "a-active", "w-nope", "w-mine", "", "../x"):   # another workstream's, not a worker, unknown, an ambiguous prefix, nothing
+            said = self.start_worker(env, wt, close=close)
+            self.assertIn("is not the id of exactly one worker of PAYMENTS_API", said["error"], close)
+        self.assertEqual(self.start_worker(env, wt, close="w-mine-1", task="x", prompt="p"), {"error": "give task and prompt to start a worker, or close to close one, not both"})
         self.assertFalse((Path(self.home) / "claude.argv").exists())   # none of them reached claude
 
-    def test_the_worker_tool_stops_a_worker_by_a_prefix_of_its_id(self):
+    def test_the_worker_tool_closes_a_worker_by_a_prefix_of_its_id(self):
         root, wt, env = self.worker_home()
-        # claude stop takes the short job id, never the full session id: the registry's jobId while it names this session, else the first 8
+        # claude stop and rm take the short job id, never the full session id: the registry's jobId while it names this session, else the first 8
         self.put("w-mine-1-full", "PAYMENTS_API", None, kind="worker", name="PAYMENTS_API work: a")
-        self.assertEqual(self.start_worker(env, wt, stop="w-mi"), {"ok": True, "summary": 'stopped "PAYMENTS_API work: a"'})
-        self.assertEqual((Path(self.home) / "claude.argv").read_text().splitlines(), ["stop", "w-mine-1"])
+        self.assertEqual(self.start_worker(env, wt, close="w-mi"), {"ok": True, "summary": 'closed "PAYMENTS_API work: a"'})
+        self.assertEqual((Path(self.home) / "claude.argv").read_text().splitlines(), ["rm", "w-mine-1"])
         sessions = Path(self.home) / ".claude" / "sessions"
         (sessions / "5151.json").write_text(json.dumps({"pid": 5151, "sessionId": "w-mine-1-full", "jobId": "job5151x"}))
         self.put("w-mine-1-full", "PAYMENTS_API", 5151, kind="worker", name="PAYMENTS_API work: a")
-        self.start_worker(env, wt, stop="w-mine-1-full")
-        self.assertEqual((Path(self.home) / "claude.argv").read_text().splitlines(), ["stop", "job5151x"])
+        self.start_worker(env, wt, close="w-mine-1-full")
+        self.assertEqual((Path(self.home) / "claude.argv").read_text().splitlines(), ["rm", "job5151x"])
+
+    UNPUSHED = ("kept w-mine-1 \u2014 its worktree is still at \u201c/x\u201d\\n  1 unpushed commit. It exists on no remote.\\n"
+                "  push it, or discard the worktree and its commits: claude rm w-mine-1 --discard-unpushed 5d62@f412\\n")
+
+    def close_worker(self, rm_code=0, rm_out="", merged=None, branch="b/y", stop_code=0):
+        """Closes w-mine-1 against a fake claude that logs its calls and answers `rm` (the first, without --discard-unpushed) with rm_code and rm_out,
+        and a fake gh that logs its cwd and arguments and answers with `merged` PRs. Returns (said, the calls in order)."""
+        root, wt, env = self.worker_home(); h = self.home
+        self.put("w-mine-1", "PAYMENTS_API", None, kind="worker", name="PAYMENTS_API work: a", branch=branch, cwd=str(wt))
+        (self.bin / "claude").write_text(f"#!/bin/sh\necho \"claude $*\" >> {h}/calls\n"
+                                         f"[ \"$1\" = stop ] && exit {stop_code}\n"
+                                         f"case \"$*\" in *--discard-unpushed*) echo removed; exit 0;; esac\n"
+                                         f"printf '{rm_out}'; exit {rm_code}\n"); (self.bin / "claude").chmod(0o755)
+        (self.bin / "gh").write_text(f"#!/bin/sh\necho \"gh $(pwd) $*\" >> {h}/calls\necho {merged if merged is not None else 0}\n"); (self.bin / "gh").chmod(0o755)
+        said = self.start_worker(env, wt, close="w-mine-1")
+        calls = (Path(h) / "calls").read_text().splitlines() if (Path(h) / "calls").exists() else []
+        return said, calls, wt
+
+    def test_closing_a_worker_stops_it_then_removes_it(self):
+        said, calls, _ = self.close_worker()
+        self.assertEqual(said, {"ok": True, "summary": 'closed "PAYMENTS_API work: a"'})
+        self.assertEqual(calls, ["claude stop w-mine-1", "claude rm w-mine-1"])
+
+    def test_closing_a_worker_that_already_exited_still_removes_it(self):
+        said, calls, _ = self.close_worker(stop_code=1)   # stop fails on an exited session
+        self.assertEqual(said["ok"], True); self.assertEqual(calls, ["claude stop w-mine-1", "claude rm w-mine-1"])
+
+    def test_a_merged_pr_lets_close_discard_the_commits_rm_reported(self):
+        said, calls, wt = self.close_worker(rm_code=1, rm_out=self.UNPUSHED, merged=1)
+        self.assertEqual(said, {"ok": True, "summary": 'closed "PAYMENTS_API work: a"'})
+        self.assertEqual(calls, ["claude stop w-mine-1", "claude rm w-mine-1",
+                                 f"gh {os.path.realpath(wt)} pr list --head b/y --state merged --json number --jq length",
+                                 "claude rm w-mine-1 --discard-unpushed 5d62@f412"])
+
+    def kept(self, **kw):
+        said, calls, _ = self.close_worker(rm_code=1, rm_out=self.UNPUSHED, **kw)
+        self.assertEqual(said, {"error": '"PAYMENTS_API work: a" is stopped but kept: its commits are on no remote and its PR has not merged'})
+        self.assertFalse([c for c in calls if "--discard-unpushed" in c], calls)
+
+    def test_close_keeps_commits_whose_pr_has_not_merged(self): self.kept(merged=0)   # open, or no PR
+
+    def test_close_keeps_commits_of_a_worker_with_no_branch(self): self.kept(merged=1, branch=None)
+
+    def test_close_reports_any_other_rm_failure(self):
+        said, calls, _ = self.close_worker(rm_code=1, rm_out="No job matching w-mine-1\\n")
+        self.assertEqual(said, {"error": "claude rm failed: No job matching w-mine-1"})
+        self.assertEqual(calls, ["claude stop w-mine-1", "claude rm w-mine-1"])   # no gh, no discard
 
     def test_a_claude_that_hangs_or_is_missing_is_refused_with_why(self):
         from unittest import mock
@@ -2228,7 +2275,7 @@ class BoardTest(unittest.TestCase):
             self.assertTrue(said["error"].startswith("claude --bg failed: ") and text in said["error"], said)
         with mock.patch.dict(os.environ, env), mock.patch.object(mod, "launch", return_value=("9d9d9d9d", "")) as launched:
             mod.worker("s1", {"task": "x", "prompt": "p"})
-        self.assertEqual(launched.call_args.args[2], 6)   # under the mod's 8 s limit on the run
+        self.assertEqual(launched.call_args.args[2], 6)   # under the mod's limit on the run
 
     def test_the_rules_send_multi_repo_work_to_the_worker_tool(self):
         self.write_charter()
