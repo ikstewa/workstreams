@@ -1,5 +1,18 @@
 {
   "name": "workstreams",
   "version": "0.1.0",
-  "description": "Workstream board, charters, tmux sidebar and active-session dispatch"
+  "description": "Workstream board, charters, tmux sidebar and active-session dispatch",
+  "userConfig": {
+    "jiraUrl": {
+      "type": "string",
+      "title": "Jira site",
+      "description": "The Jira site that issue keys in replies link to, such as https://example.atlassian.net. Unset, no key is linked."
+    },
+    "jiraProjectKeys": {
+      "type": "string",
+      "multiple": true,
+      "title": "Jira project keys",
+      "description": "The Jira project keys to link, such as PROJ or OPS. Unset, no key is linked."
+    }
+  }
 }

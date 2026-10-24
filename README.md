@@ -86,6 +86,23 @@ Outside `ws` these keys pass through to the pane unchanged.
 
 In a session, `/workstreams:board` prints the same board, ranks the decisions it raises and asks about the first. `/workstreams:board --deep` adds open pull requests from `gh`; `/workstreams:board <WORKSTREAM>` shows one workstream.
 
+### Jira links
+
+The mod can also draw Jira issue keys in Claude's replies as links to their issues. It changes only what the terminal draws: the stored message and the model's context keep the bare key. A key inside code, an existing link or a URL is left as written, and only the listed projects' keys link, so `UTF-8` or `SHA-256` stay as written.
+
+It links nothing until you set your Jira site and project keys, in `/config` or in `~/.claude/settings.json`:
+
+```json
+"pluginConfigs": {
+  "workstreams@ikstewa": {
+    "options": {
+      "jiraUrl": "https://example.atlassian.net",
+      "jiraProjectKeys": ["PROJ", "OPS"]
+    }
+  }
+}
+```
+
 ## Development
 
 ```sh
