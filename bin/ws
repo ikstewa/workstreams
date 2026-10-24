@@ -27,11 +27,12 @@ fi
 dir=$(tmux display -p -t "$side" '#{pane_current_path}')
 
 tmux set-hook -t ws client-resized "resize-pane -t $side -x 40"   # -l 40 holds only at creation; undocking a window shrinks it
-# Click a tree row: open its session in the right pane, or reset it from its ↻ (hence the column). A click anywhere else
+# Click a tree row: open its session in the right pane, or reset it from its ↻ (hence the column); the panel's ☾ opens
+# a snooze menu on the client that clicked. A click anywhere else
 # keeps tmux's default. The binding is server-wide; the pane-id test confines it to this sidebar. run-shell -c does not
 # expand formats, so the board's directory is fixed here.
 tmux bind -n MouseDown1Pane if -F -t = "#{==:#{pane_id},$side}" \
-  "run-shell -b -c '$dir' 'uv run --no-project $board open #{mouse_y} $right #{mouse_x}'" \
+  "run-shell -b -c '$dir' 'uv run --no-project $board open #{mouse_y} $right #{mouse_x} #{client_name}'" \
   "select-pane -t = ; send -M"
 # Option+j/k: next/previous session the sidebar can open without starting one. Option+n: the one that most needs you.
 # Option+m: a menu of every row. Option+e: Ian's note on the open workstream, shown under its row.

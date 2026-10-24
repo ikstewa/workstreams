@@ -93,6 +93,7 @@ def event(sid, ev):
         rec.update(state="ended", ended_reason=ev.get("reason"))
     else: raise ValueError(f"unknown event: {kind!r}")
     save_record(rec)
+    if kind == "ask": snooze(rec["workstream"])   # a permission or a question wants Ian: it ends the workstream's snooze for good
 
 def ws_dir():
     return Path.home() / ".claude" / "projects" / project_slug() / "workstreams"
@@ -492,6 +493,11 @@ def scalar(fm, name):
     q = re.fullmatch(r'"((?:[^"\\]|\\.)*)"', m.group(1))
     return unescape(q.group(1)) if q else m.group(1) or None
 
+def snoozed(fm):
+    """Seconds left of a charter's snooze, or None with no snoozed_until:, an unparseable one or one that has passed."""
+    s = seconds_since(scalar(fm, "snoozed_until"))
+    return -s if s is not None and s < 0 else None
+
 def notes():
     """{key: note} for every charter carrying one, whatever its status, as find_charter() finds a charter."""
     return {k: n for k, (fm, _) in charters(skip=()).items() if (n := scalar(fm, "note"))}
@@ -506,8 +512,10 @@ def listing():
         return {}
 
 # Grouped by assignment, a charter's block and, with nothing live, its goals: a status change recolours a row, and moves it only between Active and Blocked.
-# A pinned workstream's rows go to Pinned, drawn as they would be in the group they would otherwise land in.
-GROUPS = ("Pinned", "Active", "Blocked", "Idle", "Unassigned", "Done")
+# A pinned workstream's rows go to Pinned, drawn as they would be in the group they would otherwise land in. A snoozed one's go to Snoozed,
+# drawn as one dim line of its time left.
+GROUPS = ("Pinned", "Active", "Blocked", "Idle", "Unassigned", "Done", "Snoozed")
+SNOOZE = "☾"
 
 def block_of(fm):
     """What the work waits on outside its session, with how long once blocked_since: says, or a falsy value; only the session sets and clears it."""
@@ -535,6 +543,9 @@ def place(records):
     """What is on the board, deterministically: (live control records, group -> rows, stale keys). Both layouts format this."""
     rows, chart, sn = listing(), charters(), seen()
     pins = {k for k, (fm, _) in charters(skip=()).items() if scalar(fm, "pinned") == "true"}   # whatever the status, as notes() reads
+    naps = {k: ago(s) for k, (fm, _) in charters(skip=()).items() if (s := snoozed(fm))}   # time left, carried in a Snoozed row's note
+    def land(home, key, note, lines):
+        placed["Snoozed" if key in naps else "Pinned" if key in pins else home].append((home, key, naps.get(key, note), lines))
     done = set(charters(skip=("archived",))) - set(chart)   # finished: shown only while a session of it is still live
     # A reply is unread until Ian opens its session from the sidebar, a worker's by its own id and any other by its workstream's key
     # (the one open in the right pane is always read). ISO times compare as strings.
@@ -613,15 +624,14 @@ def place(records):
                                                     "where": f"{r['repo']}/{r['branch']}" if r.get("branch") else None}
                 lines.append((r["session_id"][:8], state, code, extra, short, r.get("children") or [], guess, r["session_id"], reset,
                               r.get("waiting_since") or r.get("last_turn_at"), wk or None))   # the last seven feed only tree()
-            placed["Pinned" if key in pins else group].append((group, key, note, lines))
+            land(group, key, note, lines)
             continue
         # Nothing live. A block, a turn inside STALE_DAYS or a charter created inside it keeps the row; absent or unparseable reads old.
         cr = re.search(r"^created:\s*(\S+)", fm, re.M)
         created_days = days_since(cr.group(1)) if cr else None
         if key not in pins and not block and (since is None or since > STALE_DAYS * 24) and (created_days is None or created_days > STALE_DAYS):
             stale.append(key); continue
-        home = "Blocked" if block else "Done" if left == "all done" else "Idle"
-        placed["Pinned" if key in pins else home].append((home, key, note, [dormant()]))
+        land("Blocked" if block else "Done" if left == "all done" else "Idle", key, note, [dormant()])
     ctl = [(r, *status("control", r)[:3]) for r in sorted((r for r in records if r.get("kind") == "control" and r["state"] != "ended" and alive(r.get("pid"))), key=lambda r: r["session_id"])]
     return ctl, placed, stale   # ctl: [(record, wide state, colour, tree label)]
 
@@ -642,6 +652,7 @@ def render(records, color=False):
         if not placed[g]: continue
         out.append(C("1", g))
         for _, key, note, lines in sorted(placed[g], key=lambda t: t[1]):
+            if g == "Snoozed": out.append(C("2", f"  {key} · {note}")); continue
             for i, (sid, state, code, extra, *rest) in enumerate(lines):
                 if nested(wk := rest[-1]):   # a worker, under its workstream's row and labelled with its name
                     out.append(f"    {C('36', wk['name'])}  {sid.ljust(8)}  {C(code, state.ljust(sw))}  {wk['where'] or ''}".rstrip())
@@ -662,7 +673,7 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
     """The same board as render(), narrow: a file-tree sidebar for a tmux pane. Width is read per call, so a resize lands on the next redraw.
     `hits` gathers line number -> {key, session_id, glyph} for every clickable row: control, sessions, and idle, blocked and done workstreams,
     and a worker's own row under its workstream's, which adds worker, its name,
-    and line number -> {key, goal} for each row of a goal in the open workstream's panel and {key, pin} for its key row; nothing else.
+    and line number -> {key, goal} for each row of a goal in the open workstream's panel and {key, pin, snooze_x} for its key row; nothing else.
     A row whose glyph is ↻ adds reset_x, the glyph's column. `current` is open_key(), resolved by the caller: its rows carry the bar,
     and its charter, or its workstream's when it is a worker, fills the rows left under the footer. Height, like width, is read per call."""
     hits = {} if hits is None else hits
@@ -688,6 +699,11 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
     for g in GROUPS:
         if not placed[g]: continue
         out.append(C("1", f"▾ {g}"))
+        if g == "Snoozed":   # one dim line a workstream; a click opens its first head row's session, and with no need Option+n passes over it
+            for _, key, left, ls in sorted(placed[g], key=lambda t: t[1]):
+                hits[len(out)] = {"key": key, "session_id": next(l[7] for l in ls if not nested(l[-1])), "glyph": SNOOZE}
+                out.append(row("  ", SNOOZE, f"{key} · {left}", "", "2", "2", on=key == ws_of(current)))
+            continue
         # A worker nests under its workstream's first head row (a [duplicate] key's first session), after that row's sub-agents.
         sessions = []
         for home, key, note, ls in sorted(placed[g], key=lambda t: t[1]):
@@ -717,7 +733,7 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
     if q := quota(W): out += [C("2", "─" * W), C(*q)]
     # The watch prints a newline after the board, so a board as tall as the pane would scroll its first row away.
     for row, goal in details(ws_of(current), W, (height or shutil.get_terminal_size().lines) - 1 - len(out), C):
-        if goal: hits[len(out)] = {"key": ws_of(current), "pin": True} if goal is True else {"key": ws_of(current), "goal": goal}
+        if goal: hits[len(out)] = {"key": ws_of(current)} | (goal if isinstance(goal, dict) else {"goal": goal})
         out.append(row)
     return "\n".join(out)
 
@@ -725,7 +741,8 @@ def details(key, W, room, C):
     """The charter of `key`, the workstream open in the right pane, in `room` rows: a double rule, its key and what is left of its goals,
     then what it is blocked on and Ian's note, its purpose, and its open goals at two rows apiece, a blank row around the key and between
     the rest, the last row cut with … when they run past. Nothing for a key with no charter, such as control or an unassigned session, or
-    with no room for a row under the key. Returns [(row, goal)]: goal is the text of the goal a row shows, which a click on it sends, or True for the key row, which a click pins or unpins."""
+    with no room for a row under the key. Returns [(row, goal)]: goal is the text of the goal a row shows, which a click on it sends, or for the key row
+    {pin, snooze_x}: a click on its ☾, columns snooze_x, snoozes or unsnoozes, and anywhere else pins or unpins."""
     found = key and charters(skip=()).get(key)
     if not found or room < 5: return []
     fm = found[0]; gl = goals(fm); left = left_of(gl) or "no goals"
@@ -742,8 +759,9 @@ def details(key, W, room, C):
         body = body[:room - 4]
         while not body[-1][1]: body.pop()
         code, last, goal = body[-1]; body[-1] = (code, last + " …" if len(last) <= W - 2 else last[:W - 1] + "…", goal)   # oneline() would drop the indent
-    mark = "★ " if scalar(fm, "pinned") == "true" else "☆ "; name = mark + oneline(key, W - len(left) - 1 - len(mark))
-    head = [(C("2", "═" * W), None), ("", None), (C("1;36", name) + " " * (W - len(name) - len(left)) + C("2", left), True), ("", None)]
+    mark = ("★ " if scalar(fm, "pinned") == "true" else "☆ ") + SNOOZE + (f" {ago(s)} " if (s := snoozed(fm)) else " ")
+    name = mark + oneline(key, W - len(left) - 1 - len(mark))
+    head = [(C("2", "═" * W), None), ("", None), (C("1;36", name) + " " * (W - len(name) - len(left)) + C("2", left), {"pin": True, "snooze_x": [2, len(mark) - 1]}), ("", None)]
     return head + [(C(code, l), goal) for code, l, goal in body]
 
 def quota(W):
@@ -801,11 +819,15 @@ def judge(entry, x=None, rows=listing):
     pid = (rec or {}).get("pid")
     return decide(entry, reg_of(pid) if alive(pid) else None, rec, x, rows)
 
-def open_row(line, target, x=None):
-    """`board.py open <line> <pane> [<x>]`: the sidebar's click, run by tmux, x its column."""
+def open_row(line, target, x=None, client=None):
+    """`board.py open <line> <pane> [<x> [<client>]]`: the sidebar's click, run by tmux, x its column and client where a menu it opens shows."""
     entry = tree_rows(goals=True).get(str(line))
     if entry and "goal" in entry: return focus(entry, target)
-    if entry and "pin" in entry: return pin(entry["key"])
+    if entry and "pin" in entry:
+        lo, hi = entry.get("snooze_x") or (0, -1)
+        if x is None or not lo <= x <= hi: return pin(entry["key"])
+        found = find_charter(entry["key"])   # read at the click: the snooze may have passed since the draw
+        return snooze(entry["key"]) if found and snoozed(found[1]) else snooze_menu(entry["key"], client)
     perform(entry, judge(entry, x), target)
 
 def focus(entry, target):
@@ -923,9 +945,39 @@ def pin(key, on=None):
         if not (m := FRONT.match(text := found[0].read_text())): return None
         lines = m.group(1).split("\n"); on = scalar(m.group(1), "pinned") != "true" if on is None else on
         put(lines, "pinned", "pinned: true" if on else None, "focus")
+        if on: put(lines, "snoozed_until", None)   # a pin and a snooze are never both on
         new = text[:m.start(1)] + "\n".join(lines) + text[m.end(1):]
         if new != text: atomic_write(found[0], new)   # unchanged, it keeps its mtime
     return f"{key} {'pinned' if on else 'unpinned'}"
+
+def snooze(key, until=None):
+    """`board.py snooze <key> <length>|unsnooze <key>`, an item of snooze_menu(), and an ask, which unsnoozes (until=None): the snoozed_until: line
+    of key's charter, a UTC ISO time, after focus: when it is new, removed when off. A snooze also removes pinned:. Written under the lock as pin()
+    writes. The report, or None without a charter."""
+    if not (found := find_charter(key)): return None
+    with locked(found[0]):
+        if not (m := FRONT.match(text := found[0].read_text())): return None
+        lines = m.group(1).split("\n"); put(lines, "snoozed_until", until and f"snoozed_until: {until}", "focus")
+        if until: put(lines, "pinned", None)
+        new = text[:m.start(1)] + "\n".join(lines) + text[m.end(1):]
+        if new != text: atomic_write(found[0], new)   # unchanged, it keeps its mtime
+    return f"{key} snoozed until {time.strftime('%a %H:%M', time.localtime(round(time.time() - seconds_since(until))))}" if until else f"{key} unsnoozed"
+
+def until_of(length):
+    """The UTC ISO time a snooze of `length` ends: Nm, Nh or Nd from now, or an ISO time as it stands; None for anything else."""
+    if m := re.fullmatch(r"(\d+)([mhd])", length or ""):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + int(m[1]) * {"m": 60, "h": 3600, "d": 86400}[m[2]]))
+    return length if seconds_since(length) is not None else None
+
+def snooze_menu(key, client=None):
+    """A click on the panel's ☾: a tmux menu on `client` of 1h, 3h and 1d, each item `board.py snooze <key> <length>`. Its 1d is 08:00 tomorrow,
+    local time, passed as an ISO time; the command's own 1d is 24 hours."""
+    import shlex, subprocess
+    t = time.localtime(); morning = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.mktime((t.tm_year, t.tm_mon, t.tm_mday + 1, 8, 0, 0, 0, 0, -1))))
+    # run-shell expands formats, so a # in a key is doubled, as note() doubles it
+    run = lambda arg: f"run-shell -b -c {shlex.quote(os.getcwd())} {shlex.quote(shlex.join([sys.executable, os.path.abspath(__file__), 'snooze', key, arg]))}".replace("#", "##")
+    items = [a for i, (name, arg) in enumerate((("1h", "1h"), ("3h", "3h"), ("1d", morning))) for a in (name, str(i + 1), run(arg))]
+    subprocess.run(["tmux", "display-menu", "-M", *(["-c", client] if client else []), "-T", f"snooze {key}".replace("#", "##"), *items], capture_output=True)
 
 def main():
     if sys.argv[1:2] == ["charter"]: print(json.dumps(charter(sys.argv[2], "--refresh" in sys.argv[3:]))); return
@@ -935,13 +987,17 @@ def main():
     if sys.argv[1:2] == ["mirror"]: sync(sys.argv[2]); return
     if sys.argv[1:2] == ["tick"]: sync(sys.argv[2], sys.argv[3]); return
     if sys.argv[1:2] == ["open"]:
-        open_row(int(sys.argv[2]), sys.argv[3], int(sys.argv[4]) if sys.argv[4:] else None); return
+        open_row(int(sys.argv[2]), sys.argv[3], int(sys.argv[4]) if sys.argv[4:] else None, sys.argv[5] if sys.argv[5:] else None); return
     if sys.argv[1:2] == ["go"]: step(*sys.argv[2:4]); return
     if sys.argv[1:2] == ["menu"]: menu(*sys.argv[2:4]); return
     if sys.argv[1:2] == ["note"]: note(*sys.argv[2:4]); return
     if sys.argv[1:2] == ["save-note"]: save_note(*sys.argv[2:4]); return
     if sys.argv[1:2] in (["pin"], ["unpin"]):
         said = pin(sys.argv[2], sys.argv[1] == "pin"); print(said or f"no charter for {sys.argv[2]}"); sys.exit(not said)
+    if sys.argv[1:2] in (["snooze"], ["unsnooze"]):
+        until = sys.argv[1] == "snooze" and until_of(sys.argv[3] if sys.argv[3:] else None)
+        if until is None: print("give a length such as 90m, 3h or 1d"); sys.exit(1)
+        said = snooze(sys.argv[2], until or None); print(said or f"no charter for {sys.argv[2]}"); sys.exit(not said)
     if sys.argv[1:2] == ["render"]:   # the /workstreams:board read; errors surface rather than print an empty board
         color = "--color" in sys.argv or ("--no-color" not in sys.argv and sys.stdout.isatty())
         narrow, width = "--tree" in sys.argv, (int(sys.argv[sys.argv.index("--width") + 1]) if "--width" in sys.argv else None)
@@ -960,7 +1016,7 @@ def main():
             print(once()); return
         # Live view for a spare terminal tab: read-only, redraws until Ctrl-C. The clock lives here, never in render().
         born, opened = os.stat(__file__).st_mtime, board_dir() / "open.json"
-        stamp = lambda: [p.exists() and p.stat().st_mtime_ns for p in (opened, ws_dir())]   # the charter directory moves when a pin lands
+        stamp = lambda: [p.exists() and p.stat().st_mtime_ns for p in (opened, ws_dir())]   # the charter directory moves when a pin or a snooze lands
         try:
             while True:
                 last = stamp()   # taken before the draw, so a click landing mid-draw still wakes the next one

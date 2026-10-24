@@ -4,10 +4,10 @@ A Claude Code plugin for people who run several sessions at once. It groups sess
 
 ## Key ideas
 
-- **Workstream.** A named effort that runs through many sessions. Its charter is one Markdown file: frontmatter for `workstream` (the key), `purpose`, `scope`, `focus`, `goals`, `status`, `blocked`, `blocked_since`, `note` and `pinned`, then a record of dated entries as the body.
+- **Workstream.** A named effort that runs through many sessions. Its charter is one Markdown file: frontmatter for `workstream` (the key), `purpose`, `scope`, `focus`, `goals`, `status`, `blocked`, `blocked_since`, `note`, `pinned` and `snoozed_until`, then a record of dated entries as the body.
 - **Binding.** A session belongs to the workstream whose `workstream:` key equals the session's name. A session named `control` is the control session. A name of the form `KEY work: <task>` is a worker of `KEY`: it reads a short brief instead of the charter, and the sidebar draws it under its workstream's row.
 - **The mod.** In a bound session it appends the charter and the newest part of the record as a conversation row at start, after `/clear` and after a compaction. Rows over the record budget roll to `<KEY>/record-archive.md` beside the charter, and done goals are left out of what a session reads. It records board state from turn, ask, answer and sub-agent events. It registers the `mcp__workstreams__charter` tool, the session's only way to write its charter (focus, record entries, goals, block), and the `mcp__workstreams__worker` tool, which starts a worker (`claude --bg`, named `KEY work: <task>`, from the project root) for work in a repo or worktree of its own, and closes one of the session's workers by id once it has reported: `claude stop` then `claude rm`, which deletes its session and worktree, and, when it keeps the worktree, removes it only if the worker's changes are committed and its commits are on the default branch or its branch has a merged PR. It then deletes the worker's local branch. It keeps the charter's goals in step with the session's task list: completing a goal's task ticks the goal.
-- **The board.** `board.py render` prints every workstream grouped as Control, Pinned, Active, Blocked, Idle, Unassigned and Done, with a stale line for workstreams that have had no session for a while. `bin/ws` runs it in a tmux sidebar; the `/workstreams:board` skill prints it in a session and ranks what to do next.
+- **The board.** `board.py render` prints every workstream grouped as Control, Pinned, Active, Blocked, Idle, Unassigned, Done and Snoozed, with a stale line for workstreams that have had no session for a while. `bin/ws` runs it in a tmux sidebar; the `/workstreams:board` skill prints it in a session and ranks what to do next.
 
 ## Requirements
 
@@ -50,7 +50,7 @@ goals:
 - **10-02** Client library merged. Refund endpoint design agreed.
 ```
 
-Set `status: done` or `status: archived` to take a workstream off the board's active groups; an archived workstream leaves the board. Do not edit a bound session's charter by hand while the session runs; the session writes it through its charter tool. Only you write `note:` and `pinned:`. You set the note from the sidebar. You set the pin by clicking the ☆/★ on the key row of the sidebar's panel, or with `board.py pin <KEY>`, and a pinned workstream sits in the board's Pinned group.
+Set `status: done` or `status: archived` to take a workstream off the board's active groups; an archived workstream leaves the board. Do not edit a bound session's charter by hand while the session runs; the session writes it through its charter tool. Only you write `note:`, `pinned:` and `snoozed_until:`. You set the note from the sidebar. You set the pin by clicking the ☆/★ on the key row of the sidebar's panel, or with `board.py pin <KEY>`, and a pinned workstream sits in the board's Pinned group. You snooze a workstream by clicking the ☾ beside the pin, which offers 1h, 3h or 08:00 tomorrow, or with `board.py snooze <KEY> <length>` (such as `90m`, `3h` or `1d`). A snoozed workstream sits as one dim line in the board's Snoozed group until the time passes, while its sessions keep running; a permission or a question from any of them ends the snooze, and `board.py unsnooze <KEY>` or a click on the ☾ ends it by hand.
 
 ### Start a bound session
 
