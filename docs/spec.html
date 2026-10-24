@@ -750,6 +750,15 @@
             it.
           </p>
           <p>
+            <strong>A snooze, while Ian wants the workstream out of his way.</strong> <code>snoozed_until:</code> is an ISO time,
+            and until it passes the workstream sits in the board's Snoozed group (§6). Once it passes, the board ignores the line,
+            so nothing needs to clear it. A snooze takes the workstream out of Ian's attention, not out of work: its sessions keep
+            running. Ian sets it with a click in the sidebar (§9), through the board skill or with <code>board.py snooze</code>,
+            and clears it the same ways. A snooze removes <code>pinned:</code> and a pin removes <code>snoozed_until:</code>, so
+            the two are never both on. When any session or worker of the workstream starts to wait on a permission or a
+            question, the board removes the line, and the snooze ends for good. A reply or a working session leaves it.
+          </p>
+          <p>
             Plus a <strong>references</strong> list that accumulates on its own: tickets, epics, PRs, docs, repos.
             Tickets are references inside a workstream, not a level of it. A workstream with several deliverables
             whose tickets close at different times is the normal shape, not a signal to split.
@@ -1075,6 +1084,16 @@
             colour and its need, so Option+n still reaches an unread reply or an ask.
           </p>
           <p>
+            <strong>Snoozed is the last group, after Done, and holds what Ian put aside.</strong> A charter whose
+            <code>snoozed_until:</code> (§2) has not passed moves its rows there from the group they would otherwise be in,
+            sorted by key. Each workstream takes one dim line, its key and the time left in a block's age style,
+            <code>KEY · 3h</code>, rounded up, with no note, hint, sub-agent or worker under it. A click on the line does what a click on
+            its workstream's first row would do. The line carries no need, so Option+n passes over it (§9). A session that
+            is waiting on a permission or a question keeps its workstream out of Snoozed, even when the wait began before the
+            snooze and so no ask cleared it: a snooze never hides an ask. A snooze keeps
+            nothing out of the stale line: a snoozed workstream with no session for three days still collapses into it.
+          </p>
+          <p>
             <strong>A workstream nobody has worked on lately collapses to one line.</strong> The board renders every
             workstream whose status is not <code>done</code> or <code>archived</code>, two lines apiece, and there are
             forty-odd of them once the project memory files have all become records — a list as long as the memory index
@@ -1228,7 +1247,8 @@
             whose click would start a session or only say why it cannot. Option+n opens the session that most needs Ian. Red
             rows come first, asking him for anything but a reply: a permission, a question, or what the listing says the
             session waits for, the longest wait first. Unread replies follow, the oldest first, dated by the wait or else by the
-            last turn; a reply he has read is passed over, and so is every Blocked row, which waits on someone else. Control counts like any row. Like a step, it moves on from the row
+            last turn; a reply he has read is passed over, and so is every Blocked row, which waits on someone else, and every
+            Snoozed row, which Ian put aside. Control counts like any row. Like a step, it moves on from the row
             open now, so pressing again goes down the list, and it opens only a row whose click would attach; with nothing to
             open it says so. Option+m opens a menu of every row, and picking an
             item is a click on that row. Option+e notes the workstream open in the right pane (below). The bindings apply only
@@ -1267,8 +1287,16 @@
           <p>
             <strong>A click on the key row pins or unpins.</strong> The panel's key row starts with <code>☆</code>, or
             <code>★</code> when the workstream is pinned (§2), and a click on it toggles the pin. The sidebar redraws at once, as it
-            does for an open, because the watch also wakes when the charter directory changes. Every other row of the panel is
-            display only, and neither a goal's rows nor the key row are stops for the keys or items in the menu.
+            does for an open, because the watch also wakes when the charter directory changes.
+          </p>
+          <p>
+            <strong>A click on the key row's <code>☾</code> snoozes or unsnoozes.</strong> Beside the pin the key row carries
+            <code>☾</code>, followed by the time left while the workstream is snoozed (§2). A click on it opens a tmux menu of 1h,
+            3h and 1d on the client that clicked, and an item runs <code>board.py snooze</code>. In the menu, 1d means 08:00
+            tomorrow, local time, which the item passes to the command as an ISO time; the command's own <code>1d</code> is 24
+            hours. A click on the mark of a snoozed workstream unsnoozes it, with no menu. A click anywhere else on the key row
+            pins or unpins. Every other row of the panel is display only, and neither a goal's rows nor the key row are stops
+            for the keys or items in the menu.
           </p>
           <p>
             <code>bin/ws</code> builds the <code>ws</code> session and applies every binding, and it applies them again on each
