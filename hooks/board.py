@@ -498,6 +498,10 @@ def snoozed(fm):
     s = seconds_since(scalar(fm, "snoozed_until"))
     return -s if s is not None and s < 0 else None
 
+def remaining(s):
+    """ago() for time to come, rounded up: a fresh 3h snooze reads 3h."""
+    return ago(s + (59 if s < 3600 else 3599 if s < 48 * 3600 else 86399))
+
 def notes():
     """{key: note} for every charter carrying one, whatever its status, as find_charter() finds a charter."""
     return {k: n for k, (fm, _) in charters(skip=()).items() if (n := scalar(fm, "note"))}
@@ -543,9 +547,10 @@ def place(records):
     """What is on the board, deterministically: (live control records, group -> rows, stale keys). Both layouts format this."""
     rows, chart, sn = listing(), charters(), seen()
     pins = {k for k, (fm, _) in charters(skip=()).items() if scalar(fm, "pinned") == "true"}   # whatever the status, as notes() reads
-    naps = {k: ago(s) for k, (fm, _) in charters(skip=()).items() if (s := snoozed(fm))}   # time left, carried in a Snoozed row's note
+    naps = {k: remaining(s) for k, (fm, _) in charters(skip=()).items() if (s := snoozed(fm))}   # time left, carried in a Snoozed row's note
     def land(home, key, note, lines):
-        placed["Snoozed" if key in naps else "Pinned" if key in pins else home].append((home, key, naps.get(key, note), lines))
+        nap = key in naps and not any(l[2] == "31" for l in lines)   # a snooze never hides an ask, even one older than the snooze
+        placed["Snoozed" if nap else "Pinned" if key in pins else home].append((home, key, naps[key] if nap else note, lines))
     done = set(charters(skip=("archived",))) - set(chart)   # finished: shown only while a session of it is still live
     # A reply is unread until Ian opens its session from the sidebar, a worker's by its own id and any other by its workstream's key
     # (the one open in the right pane is always read). ISO times compare as strings.
@@ -759,7 +764,7 @@ def details(key, W, room, C):
         body = body[:room - 4]
         while not body[-1][1]: body.pop()
         code, last, goal = body[-1]; body[-1] = (code, last + " …" if len(last) <= W - 2 else last[:W - 1] + "…", goal)   # oneline() would drop the indent
-    mark = ("★ " if scalar(fm, "pinned") == "true" else "☆ ") + SNOOZE + (f" {ago(s)} " if (s := snoozed(fm)) else " ")
+    mark = ("★ " if scalar(fm, "pinned") == "true" else "☆ ") + SNOOZE + (f" {remaining(s)} " if (s := snoozed(fm)) else " ")
     name = mark + oneline(key, W - len(left) - 1 - len(mark))
     head = [(C("2", "═" * W), None), ("", None), (C("1;36", name) + " " * (W - len(name) - len(left)) + C("2", left), {"pin": True, "snooze_x": [2, len(mark) - 1]}), ("", None)]
     return head + [(C(code, l), goal) for code, l, goal in body]

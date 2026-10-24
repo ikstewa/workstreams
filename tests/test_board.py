@@ -1885,15 +1885,15 @@ class BoardTest(unittest.TestCase):
     def test_a_snoozed_workstream_is_one_dim_line_of_its_time_left_after_done(self):
         # An unread reply, a running sub-agent, a worker and a note: still one line, and no need, so Option+n passes over it.
         today = time.strftime("%Y-%m-%d", time.gmtime()); me = self.me()
-        self.write_charter("NAP", extra=self.NOTE_LINE + f"snoozed_until: {self.ahead(3.1)}\n")
+        self.write_charter("NAP", extra=self.NOTE_LINE + f"snoozed_until: {self.ahead(3)}\n")
         self.put("s-nap-full", "NAP", me, state="waiting", waiting_for="replied", last_turn_at=self.ago(0.1), children=[{"agent_id": "a1", "name": "Explore", "state": "running"}])
         self.put("w-nap-full", "NAP", me, kind="worker", name="NAP work: sweep", state="busy")
         self.write_charter("SHORT", created=today, extra=f"snoozed_until: {self.ahead(0.5)}\n"); self.write_charter("FIN", created=today, extra='goals:\n  - "[x] Ship"\n')
         lines, wide = self.tree(40).splitlines(), self.render("--no-color")
         self.assertEqual([l for l in lines if l.startswith("▾")], ["▾ Control", "▾ Done", "▾ Snoozed"])
-        self.assertEqual([l.rstrip() for l in lines[lines.index("▾ Snoozed") + 1:lines.index("─" * 40)]], ["  ☾ NAP · 3h", "  ☾ SHORT · 29m"])
+        self.assertEqual([l.rstrip() for l in lines[lines.index("▾ Snoozed") + 1:lines.index("─" * 40)]], ["  ☾ NAP · 3h", "  ☾ SHORT · 30m"])
         self.assertEqual([l for l in wide.splitlines() if l in ("Done", "Snoozed")], ["Done", "Snoozed"])
-        self.assertEqual(wide.splitlines()[-3:], ["Snoozed", "  NAP · 3h", "  SHORT · 29m"])
+        self.assertEqual(wide.splitlines()[-3:], ["Snoozed", "  NAP · 3h", "  SHORT · 30m"])
         for text in (wide, "\n".join(lines)):
             for gone in ("✎", "note:", "Explore", "sweep", "unread"): self.assertNotIn(gone, text)
         self.assertIn("\x1b[2m  NAP · 3h\x1b[0m", self.render("--color"))
@@ -1908,6 +1908,17 @@ class BoardTest(unittest.TestCase):
         self.assertEqual([l for l in lines if l.startswith("▾")], ["▾ Control", "▾ Active", "▾ Blocked"])
         self.assertIn("  ⏸ HELD" + " " * 21 + "PR #12 · 2d", lines)
         self.assertEqual([self.group_of(wide, k) for k in ("HELD", "BUSY", "ODD")], ["Blocked", "Active", "Active"])
+
+    def test_a_snooze_never_hides_an_ask_already_waiting(self):
+        # Snoozed after the ask began, so no ask event cleared it: the row stays where Ian answers it, and Option+n finds it.
+        self.write_charter("PERM", extra=f"snoozed_until: {self.ahead(3)}\n")
+        self.put("s-perm", "PERM", self.me(), state="waiting", waiting_for="permission", waiting_since=self.ago(0.2))
+        self.write_charter("WQ", extra=f"snoozed_until: {self.ahead(3)}\n")
+        self.put("w-wq", "WQ", self.me(), kind="worker", name="WQ work: sweep", state="waiting", waiting_for="question", waiting_since=self.ago(0.1))
+        wide, hits = self.render("--no-color"), self.hits()
+        self.assertEqual([self.group_of(wide, k) for k in ("PERM", "WQ")], ["Active", "Active"])
+        self.assertNotIn("▾ Snoozed", self.tree(40))
+        self.assertEqual({h["key"]: h.get("need") for h in hits.values() if h.get("need")}, {"PERM": "asks", "WQ": "asks"})
 
     def test_snooze_and_unsnooze_write_only_their_line_and_a_snooze_ends_the_pin(self):
         import calendar
@@ -1969,7 +1980,7 @@ class BoardTest(unittest.TestCase):
         # Snoozed, the mark carries the time left, and a click anywhere on it unsnoozes without a menu.
         rows, hits = self.goal_map(extra=f"snoozed_until: {self.ahead(2)}\n")
         line, entry = next((n, e) for n, e in hits.items() if "pin" in e)
-        self.assertEqual((rows[int(line)][:11], entry["snooze_x"]), ("☆ ☾ 1h OPEN", [2, 6]))
+        self.assertEqual((rows[int(line)][:11], entry["snooze_x"]), ("☆ ☾ 2h OPEN", [2, 6]))
         self.assertEqual(self.board_py("open", str(line), "%9", "5", "/dev/ttys042"), [])
         self.assertNotIn("snoozed_until", self.charter_path("OPEN").read_text())
 

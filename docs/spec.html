@@ -1087,8 +1087,10 @@
             <strong>Snoozed is the last group, after Done, and holds what Ian put aside.</strong> A charter whose
             <code>snoozed_until:</code> (§2) has not passed moves its rows there from the group they would otherwise be in,
             sorted by key. Each workstream takes one dim line, its key and the time left in a block's age style,
-            <code>KEY · 3h</code>, with no note, hint, sub-agent or worker under it. A click on the line does what a click on
-            its workstream's first row would do. The line carries no need, so Option+n passes over it (§9). A snooze keeps
+            <code>KEY · 3h</code>, rounded up, with no note, hint, sub-agent or worker under it. A click on the line does what a click on
+            its workstream's first row would do. The line carries no need, so Option+n passes over it (§9). A session that
+            is waiting on a permission or a question keeps its workstream out of Snoozed, even when the wait began before the
+            snooze and so no ask cleared it: a snooze never hides an ask. A snooze keeps
             nothing out of the stale line: a snoozed workstream with no session for three days still collapses into it.
           </p>
           <p>
