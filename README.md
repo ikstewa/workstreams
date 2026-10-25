@@ -81,6 +81,7 @@ Inside the `ws` session:
 | Option+n | Open the next workstream session that needs you, never a worker |
 | Option+m | Menu of every row |
 | Option+e | Edit the note on the open workstream |
+| Click a session id in a reply | Open that session in the right pane, as a click on its row does. Only an id with a sidebar row is a link: an 8-character id or a full one, bare or alone in inline code |
 
 Outside `ws` these keys pass through to the pane unchanged.
 
