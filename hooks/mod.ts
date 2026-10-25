@@ -1,5 +1,5 @@
 import type { ApiMessage, EngineInterface, Register, ToolCallResult, ToolSpec } from 'claude-code'
-import { jiraLinks } from './jira-links.ts'
+import { issueLinks } from './jira-links.ts'
 
 // A bound session's charter, as a user row of its conversation; the charter tool, its one way to write that charter; the worker tool,
 // its one way to start and close a worker session; a worker's brief; its goals kept in step with its task list; and every session's board record.
@@ -272,7 +272,7 @@ async function renamed($: EngineInterface, st: State): Promise<boolean> {
 
 export const register: Register = (on, options) => {
   const st: State = { asks: new Set(), kids: new Set(), queue: [], draining: false }
-  jiraLinks(on, options)
+  issueLinks(on, options)
 
   // The goals are mirrored at a start, at each prompt and at a main-loop turn's end, as the settings hooks did before the mod.
   on('session.start', async ($, e, next) => {
