@@ -78,7 +78,7 @@ Inside the `ws` session:
 | --- | --- |
 | Click a sidebar row | Open the row's session in the right pane, or reset a stale one from its `↻` |
 | Option+j / Option+k | Open the next or previous session without starting one |
-| Option+n | Open the session that most needs you |
+| Option+n | Open the workstream session that most needs you, never a worker |
 | Option+m | Menu of every row |
 | Option+e | Edit the note on the open workstream |
 
