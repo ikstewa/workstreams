@@ -34,7 +34,7 @@ tmux set-hook -t ws client-resized "resize-pane -t $side -x 40"   # -l 40 holds 
 tmux bind -n MouseDown1Pane if -F -t = "#{==:#{pane_id},$side}" \
   "run-shell -b -c '$dir' 'uv run --no-project $board open #{mouse_y} $right #{mouse_x} #{client_name}'" \
   "select-pane -t = ; send -M"
-# Option+j/k: next/previous session the sidebar can open without starting one. Option+n: the one that most needs you.
+# Option+j/k: next/previous session the sidebar can open without starting one. Option+n: the next one that needs you.
 # Option+m: a menu of every row. Option+e: Ian's note on the open workstream, shown under its row.
 # Server-wide keys too, so outside ws they pass through to the pane.
 tmux bind -n M-j if -F "#{==:#{session_name},ws}" "run-shell -b -c '$dir' 'uv run --no-project $board go next $right'" "send-keys M-j"

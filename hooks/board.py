@@ -608,7 +608,7 @@ def place(records):
             last = max((r for r in records if r.get("workstream") == key and r.get("kind") == "active"), key=lambda r: r.get("last_turn_at") or r.get("started_at") or "", default=None)
             sid = last["session_id"] if last and rows.get(last["session_id"], {}).get("kind") == "background" else None
             reset = bool(sid) and (hours_since(last.get("last_turn_at")) or 0) > COLD_HOURS
-            return ("–", block or label + (f" · {since}h" if since is not None else ""), "2" if block else "34", extra, block or label, [], None, sid, reset, None, None)
+            return ("–", block or label + (f" · {since}h" if since is not None else ""), "2" if block else "34", extra, block or label, [], None, sid, reset, None)
         if mine:
             if sum(r.get("kind") == "active" for r in mine) > 1: note = "[duplicate] " + note
             if key in done: note = "done"
@@ -627,8 +627,7 @@ def place(records):
                         [f"· {c.get('name')} {str(c.get('agent_id'))[:8]} {c.get('state')}" for c in r.get("children") or []]
                 wk = r.get("kind") == "worker" and {"name": r["name"], "task": r["name"].partition(" work: ")[2], "nested": under(r),
                                                     "where": f"{r['repo']}/{r['branch']}" if r.get("branch") else None}
-                lines.append((r["session_id"][:8], state, code, extra, short, r.get("children") or [], guess, r["session_id"], reset,
-                              r.get("waiting_since") or r.get("last_turn_at"), wk or None))   # the last seven feed only tree()
+                lines.append((r["session_id"][:8], state, code, extra, short, r.get("children") or [], guess, r["session_id"], reset, wk or None))   # the last six feed only tree()
             land(group, key, note, lines)
             continue
         # Nothing live. A block, a turn inside STALE_DAYS or a charter created inside it keeps the row; absent or unparseable reads old.
@@ -693,13 +692,13 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
         return f"{C(lead_code, lead)}{C(code, glyph)} {C(name_code, name)}{' ' * (W - left - len(name) - len(state))}{C(code, state)}"
     tone = lambda code: code if code in ("31", "32", "33", "2;33") else "2"   # red asks, yellow unread, dim yellow read, green working, dim the rest
     # For Option+n: red asks Ian for an answer, yellow is an unread reply to him; a read one, dim yellow, needs nothing.
-    need = lambda code, since: {"need": {"31": "asks", "33": "unread"}[code], "since": since} if code in ("31", "33") else {}
+    need = lambda code: {"need": {"31": "asks", "33": "unread"}[code]} if code in ("31", "33") else {}
     nt = notes()
     def noted(key, trunk):   # Ian's note, dim, on the row's trunk; display only, so never in `hits`
         lead = f"  {trunk} ✎ "; return [C("2", lead + oneline(nt[key], W - len(lead)))] if nt.get(key) else []
     out = [C("1", "WORKSTREAMS"), C("1", "▾ Control")]
     for r, _, code, st in ctl or [(None, None, "2", "click to open")]:   # always a row: with no live control, a click dispatches one
-        hits[len(out)] = {"key": "control", "session_id": r and r["session_id"], "glyph": "◆"} | need(code, r and (r.get("waiting_since") or r.get("last_turn_at")))
+        hits[len(out)] = {"key": "control", "session_id": r and r["session_id"], "glyph": "◆"} | need(code)
         out.append(row("  ", "◆", "control", st, tone(code), "36", cap=W - 12, on=current == "control"))   # 12: lead, glyph, "control", gap
     for g in GROUPS:
         if not placed[g]: continue
@@ -714,10 +713,10 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
         for home, key, note, ls in sorted(placed[g], key=lambda t: t[1]):
             heads = [l for l in ls if not nested(l[-1])]
             sessions += [(key, note.startswith("[duplicate]"), l, home, [w for w in ls if nested(w[-1])] if n == 0 else []) for n, l in enumerate(heads)]
-        for i, (key, dup, (tag, _, code, _, short, kids, guess, sid, reset, since, wk), home, workers) in enumerate(sessions):
+        for i, (key, dup, (tag, _, code, _, short, kids, guess, sid, reset, wk), home, workers) in enumerate(sessions):
             # A stale row's status is that it is stale, so its glyph is the reset button. A dormant row (tag "–", nothing live, a retired session or none) is ◌; a live one keeps ○.
             glyph = "↻" if reset else "⏸" if home == "Blocked" else {"31": "●", "33": "●", "32": "▶"}.get(code, "◌" if tag == "–" else "○")
-            hits[len(out)] = {"key": key, "session_id": sid, "glyph": glyph} | ({"worker": wk["name"]} if wk else {}) | ({"reset_x": 2} if reset else {}) | need(code, since)   # reset_x: the column after the two-column lead
+            hits[len(out)] = {"key": key, "session_id": sid, "glyph": glyph} | ({"worker": wk["name"]} if wk else {}) | ({"reset_x": 2} if reset else {}) | need(code)   # reset_x: the column after the two-column lead
             if home == "Blocked":   # a block's label may take half the row, and what it waits on gives way before its age
                 what, tail = re.fullmatch(r"(.*?)((?: · \d+[mhd])?)", short).groups(); short = oneline(what, W // 2 - len(tail)) + tail
             # ponytail: the title names a key, not a session, so every row of a [duplicate] key carries the bar
@@ -728,9 +727,9 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
             for j, c in enumerate(kids):
                 out.append(row(f"  {trunk} ", "└" if j == len(kids) - 1 and not workers else "├", str(c.get("name")), str(c.get("state")),
                                "32" if c.get("state") == "running" else "2"))
-            for j, (_, _, wcode, _, wshort, _, _, wsid, _, wsince, w) in enumerate(workers):
+            for j, (_, _, wcode, _, wshort, _, _, wsid, _, w) in enumerate(workers):
                 wglyph = {"31": "●", "33": "●", "32": "▶"}.get(wcode, "○")   # the branch is the lead's last column; the glyph is the session's own state
-                hits[len(out)] = {"key": key, "session_id": wsid, "glyph": wglyph, "worker": w["name"]} | need(wcode, wsince)
+                hits[len(out)] = {"key": key, "session_id": wsid, "glyph": wglyph, "worker": w["name"]} | need(wcode)
                 out.append(row(f"  {trunk} " + ("└" if j == len(workers) - 1 else "├"), wglyph, w["task"] + (f" · {w['where']}" if w["where"] else ""), wshort,
                                tone(wcode), on=wsid == current))
     count = f"stale ({len(stale)})"; full = f"{count}: " + ", ".join(sorted(stale))
@@ -882,17 +881,15 @@ def step(way, target):
     """`board.py go next|prev|need <pane>`: from the stop open in `target` (a workstream's key, or a worker's session id), open the next (or previous) row in the sidebar's order, wrapping,
     whose click would attach: a live background session, or a retired one to revive. A row whose click would dispatch, restart or
     only explain is passed over, so a step never starts a session. With nothing open, next starts at the top and prev at the bottom.
-    need steps the same way through only the rows waiting on Ian: the ones asking him for an answer, then his unread replies, each oldest first."""
+    need steps the same way and stops only at a row waiting on Ian: one asking him for an answer, or his unread reply."""
     import functools, subprocess
     hits = tree_rows(); order = [hits[n] for n in sorted(hits, key=int)]
     if way == "prev": order.reverse()
-    # ponytail: an unread row, once opened, leaves the list at the next redraw, so the press after it starts again from the top
-    if way == "need": order = sorted((e for e in order if e.get("need")), key=lambda e: (e["need"] != "asks", e.get("since") or ""))
     here = open_key(target); at = next((i for i, e in enumerate(order) if stop(e) == here), -1)
     rows = functools.cache(listing)   # read once a step, and only for a row whose session is not live
     for e in order[at + 1:] + order[:at + 1]:
         # ponytail: a [duplicate] key is one stop, as the title names a key, not a session
-        if stop(e) != here and (act := judge(e, rows=rows)) and act[0] == "attach": return perform(e, act, target)
+        if stop(e) != here and (way != "need" or e.get("need")) and (act := judge(e, rows=rows)) and act[0] == "attach": return perform(e, act, target)
     subprocess.run(["tmux", "display-message", "workstreams: nothing needs you" if way == "need" else "workstreams: no other session to open"], capture_output=True)
 
 MENU_KEYS = "123456789abcdefghijklmnoprstuvwxyz"   # no q: it closes a tmux menu

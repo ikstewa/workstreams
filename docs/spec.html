@@ -1244,13 +1244,12 @@
             The keyboard switches too, from any pane, and focus stays where it is. Option+j and Option+k step to the next or
             previous session the sidebar can open without starting one: a live background session, or a retired one that a
             click revives. They follow the sidebar's order from the row open now and wrap at both ends, passing over any row
-            whose click would start a session or only say why it cannot. Option+n opens the session that most needs Ian. Red
-            rows come first, asking him for anything but a reply: a permission, a question, or what the listing says the
-            session waits for, the longest wait first. Unread replies follow, the oldest first, dated by the wait or else by the
-            last turn; a reply he has read is passed over, and so is every Blocked row, which waits on someone else, and every
-            Snoozed row, which Ian put aside. Control counts like any row. Like a step, it moves on from the row
-            open now, so pressing again goes down the list, and it opens only a row whose click would attach; with nothing to
-            open it says so. Option+m opens a menu of every row, and picking an
+            whose click would start a session or only say why it cannot. Option+n steps the same way, forward only, and stops
+            only at a row that needs Ian: a red row asking him for anything but a reply (a permission, a question, or what the
+            listing says the session waits for), or a yellow reply he has not read. It measures from the row open now, even one
+            that needs nothing, so pressing again goes on down the sidebar. A reply he has read is passed over, and so is every
+            Blocked row, which waits on someone else, and every Snoozed row, which Ian put aside. Control counts like any row.
+            It opens only a row whose click would attach; with nothing to open it says so. Option+m opens a menu of every row, and picking an
             item is a click on that row. Option+e notes the workstream open in the right pane (below). The bindings apply only
             inside the <code>ws</code> tmux session; elsewhere each key reaches the pane unchanged.
           </p>
