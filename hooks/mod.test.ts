@@ -213,8 +213,15 @@ function harness(name: string | null = 'PAYMENTS_API') {
     complete: (reason: TurnCompleteReason, answer = '', agentId?: string) =>
       dispatch(() => call('turn.complete', { answer, durationMs: 5, isAborted: reason === 'aborted', turnId: 't1', reason, ...(agentId === undefined ? {} : { agentId }) },
         async (e: { answer: string }) => ({ text: e.answer }))),
-    check: (tool: string, id: string | undefined, decision: 'allow' | 'ask' | 'deny') =>
-      dispatch(() => call('tool.check', { tool, input: {}, ...(id === undefined ? {} : { tool_use_id: id }) }, async () => ({ decision, reason: 'the rule' }))),
+    check: (tool: string, id: string | undefined, decision: 'allow' | 'ask' | 'deny', input: unknown = {}, agentId?: string) =>
+      dispatch(() => call('tool.check', { tool, input, ...(id === undefined ? {} : { tool_use_id: id }), ...(agentId === undefined ? {} : { agentId }) },
+        async () => ({ decision, reason: 'the rule' }))),
+    // A dialog about to show, or with `decision`, a settings hook answering in its place.
+    permission: (tool: string, input: unknown = {}, agentId?: string, decision?: unknown) =>
+      dispatch(() => call('classic.PermissionRequest', { hook_event_name: 'PermissionRequest', tool_name: tool, tool_input: input, ...(agentId === undefined ? {} : { agent_id: agentId }) },
+        async () => (decision === undefined ? {} : { decision }))),
+    // A call put to a person: the decider's ask, then its dialog.
+    ask: async (tool: string, id: string): Promise<unknown> => (await fire.check(tool, id, 'ask'), fire.permission(tool)),
     // A call with the tool's arguments in `fields`, beside tool and tool_use_id as the engine spreads them, and core answering `out`.
     call: (tool: string, id: string | undefined, fields: Record<string, unknown> = {}, out: unknown = { result: 'ran', text: 'ran', ref: 1 }) =>
       dispatch(() => call('tool.call', { tool, ...(id === undefined ? {} : { tool_use_id: id }), ...fields }, async () => (w.core.push(tool), out)), true),
@@ -472,7 +479,7 @@ test('a hook returns before its board.py run, which a $.clock callback makes', a
 test('a call answered as its dispatch is abandoned is still recorded', async () => {
   const { w, fire } = harness()
   w.abandon = true   // a $.process.run made inside a hook's dispatch rejects, as it did on an Esc at a dialog
-  await fire.check('Bash', 't1', 'ask')
+  await fire.ask('Bash', 't1')
   await fire.call('Bash', 't1')
   expect(events(w)).toEqual(['ask', 'answered'])
   expect(w.logs).toEqual([])
@@ -504,36 +511,66 @@ test("a main-loop turn's end records why it ended and its answer", async () => {
     ({ event: 'turn.complete', reason, answer: i === 0 ? 'Done.' : '', cwd: CWD })))
 })
 
-test('a call put to the decider records an ask, a question for AskUserQuestion; nothing else does', async () => {
+test('a call put to the decider records a permission ask once its dialog shows, and AskUserQuestion a question at once; nothing else does', async () => {
   const { w, fire } = harness()
   expect(await fire.check('Bash', 't1', 'ask')).toEqual({ decision: 'ask', reason: 'the rule' })
   await fire.check('AskUserQuestion', 't2', 'ask')
   expect(await fire.check('Bash', 't3', 'allow')).toEqual({ decision: 'allow', reason: 'the rule' })
   await fire.check('Bash', 't4', 'deny')
   await fire.check('Bash', undefined, 'ask')   // a query: no call, no one asked
-  expect(w.sent.map(s => s.ev)).toEqual([{ event: 'ask', kind: 'permission', cwd: CWD }, { event: 'ask', kind: 'question', cwd: CWD }])
+  expect(w.sent.map(s => s.ev)).toEqual([{ event: 'ask', kind: 'question', cwd: CWD }])
+  await fire.permission('Bash')
+  expect(w.sent.map(s => s.ev)).toEqual([{ event: 'ask', kind: 'question', cwd: CWD }, { event: 'ask', kind: 'permission', cwd: CWD }])
+})
+
+test('an auto-mode ask the classifier settles, no dialog shown, records nothing', async () => {
+  const { w, fire } = harness()
+  await fire.check('Bash', 't1', 'ask', { command: 'uv run pytest' })
+  await fire.call('Bash', 't1')
+  await fire.permission('Bash', { command: 'uv run pytest' })   // a later dialog is not that call's
+  expect(w.sent).toEqual([])
+})
+
+test('a dialog is matched to its call by tool, loop and input, and a settings hook that answers it asks no one', async () => {
+  const { w, fire } = harness()
+  await fire.check('Bash', 't1', 'ask', { command: 'ls' })
+  await fire.check('Edit', 't2', 'ask', { command: 'rm x' })
+  await fire.check('Bash', 't3', 'ask', { command: 'rm x' }, 'a1')
+  await fire.check('Bash', 't4', 'ask', { command: 'rm x' })
+  await fire.check('Bash', 't5', 'ask', { command: 'git push' })
+  expect(await fire.permission('Bash', { command: 'rm x' })).toEqual({})
+  const allow = { behavior: 'allow' }
+  expect(await fire.permission('Bash', { command: 'git push' }, undefined, allow)).toEqual({ decision: allow })
+  expect(events(w)).toEqual(['ask'])
+  for (const id of ['t1', 't2', 't3', 't5']) await fire.call('Bash', id)
+  expect(events(w)).toEqual(['ask'])
+  await fire.call('Bash', 't4')
+  expect(events(w)).toEqual(['ask', 'answered'])
 })
 
 test('a call that asked records answered when it returns, once no other call that asked is out', async () => {
   const { w, fire } = harness()
-  await fire.check('Bash', 't1', 'ask')
-  await fire.check('Edit', 't2', 'ask')
+  await fire.ask('Bash', 't1')
+  await fire.ask('Bash', 't2')   // a like call's dialog is its own
   await fire.check('Read', 't3', 'allow')
   expect(await fire.call('Bash', 't1')).toEqual({ result: 'ran', text: 'ran', ref: 1 })
   await fire.call('Read', 't3')
   expect(events(w)).toEqual(['ask', 'ask'])
-  await fire.call('Edit', 't2')
-  await fire.call('Edit', 't2')
+  await fire.call('Bash', 't2')
+  await fire.call('Bash', 't2')
   await fire.call('Bash', undefined)
   expect(events(w)).toEqual(['ask', 'ask', 'answered'])
 })
 
 test("a main-loop turn's end forgets the calls that asked and are still out", async () => {
   const { w, fire } = harness()
-  await fire.check('Bash', 't1', 'ask')
+  await fire.ask('Bash', 't1')
+  await fire.check('Bash', 't2', 'ask')
   await fire.complete('aborted')
   await fire.call('Bash', 't1')
-  expect(events(w)).toEqual(['ask', 'turn.complete'])
+  await fire.ask('Bash', 't3')
+  await fire.call('Bash', 't3')
+  expect(events(w)).toEqual(['ask', 'turn.complete', 'ask', 'answered'])
 })
 
 test("a sub-agent shows from its run's first model request, by its type, and leaves with its run's end", async () => {
@@ -633,12 +670,15 @@ test('a start forgets the sub-agents and the calls the record no longer holds', 
   const { w, fire } = harness('loose')
   await fire.start()
   await fire.step('a1')
-  await fire.check('Bash', 't1', 'ask')
+  await fire.ask('Bash', 't1')
+  await fire.check('Bash', 't2', 'ask')
   w.name = 'ADOPTED'
   await fire.prompt('b')
   await fire.call('Bash', 't1')
   await fire.step('a1')
-  expect(events(w)).toEqual(['start', 'child.start', 'ask', 'start', 'child.start'])
+  await fire.ask('Bash', 't3')
+  await fire.call('Bash', 't3')
+  expect(events(w)).toEqual(['start', 'child.start', 'ask', 'start', 'child.start', 'ask', 'answered'])
 })
 
 for (const [fail, why] of [['exit', 'board.py exited 1: ValueError: unknown event'], ['slow', 'process.run: still running at 10000 ms']] as const) {
@@ -646,7 +686,7 @@ for (const [fail, why] of [['exit', 'board.py exited 1: ValueError: unknown even
     const { w, fire } = harness()
     w.eventFail = fail
     expect(await fire.turn()).toEqual({ turnId: 't1' })
-    expect(await fire.check('Bash', 't1', 'ask')).toEqual({ decision: 'ask', reason: 'the rule' })
+    expect(await fire.ask('Bash', 't1')).toEqual({})
     expect(w.logs).toEqual([{ to: 'debug', text: `board turn.start not recorded: ${why}` }, { to: 'debug', text: `board ask not recorded: ${why}` }])
     w.eventFail = undefined
     await fire.call('Bash', 't1')
@@ -656,7 +696,7 @@ for (const [fail, why] of [['exit', 'board.py exited 1: ValueError: unknown even
 
 test('board.py runs one event at a time', async () => {
   const { w, fire } = harness()
-  await Promise.all([fire.check('Bash', 't1', 'ask'), fire.step('a1'), fire.turn(), fire.complete('answer', 'Done.')])
+  await Promise.all([fire.check('AskUserQuestion', 't1', 'ask'), fire.step('a1'), fire.turn(), fire.complete('answer', 'Done.')])
   expect(w.overlap).toBe(false)
   expect(events(w).sort()).toEqual(['ask', 'child.start', 'turn.complete', 'turn.start'])
 })
@@ -800,7 +840,7 @@ test("the goals are mirrored at a start, at each prompt, at a main-loop turn's e
   await fire.prompt('go')
   await fire.turn()
   await fire.step('a1')
-  await fire.check('Bash', 't1', 'ask')
+  await fire.ask('Bash', 't1')
   await fire.call('Bash', 't1')
   await fire.complete('answer', 'Found it.', 'a1')
   await fire.compact('auto', [row('user', 'go')])
@@ -960,4 +1000,16 @@ test('in the engine, a /clear records the id the session goes on under, from the
   await k.clock.advance(50)
   expect(k.sent.map(s => s.argv[5])).toEqual(['s0', 's1'])
   expect(sentIn(k)[1]).toEqual({ event: 'start', cwd: CWD })
+})
+
+test("in the engine, a dialog nobody answers records the ask until the refused call returns, and one a hook beneath answers records none", async ($, on) => {
+  const k = engine(on)
+  let decision: { behavior: 'allow' } | undefined
+  on('classic.PermissionRequest', () => (decision === undefined ? {} : { decision }))
+  expect(await $.tool.call({ tool: 'Bash', command: 'uv run pytest', agentId: 'a1' })).toEqual(expect.objectContaining({ isError: true }))
+  decision = { behavior: 'allow' }
+  expect(await $.tool.call({ tool: 'Bash', command: 'uv run pytest' })).toEqual(expect.objectContaining({ result: expect.anything() }))
+  await k.clock.settle()
+  expect(sentIn(k)).toEqual([{ event: 'ask', kind: 'permission', cwd: CWD }, { event: 'answered', cwd: CWD }])
+  expect(k.core).toEqual(['Bash'])
 })

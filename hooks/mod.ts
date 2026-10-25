@@ -92,13 +92,15 @@ type Job = { cmd: 'event' | 'write' | 'worker' | 'mirror' | 'tick'; args?: strin
 type Out = { stdout: string } | { failed: string }
 
 // The registry file and name the last board.py read reported, and what is owed at the next prompt or main-loop model request.
-// restart: the new session id of a /clear or a /resume owes its record a start. asks: calls that went to the mode's decider and
-// have not returned. kids: the sub-agents whose run the record shows. queue: board.py runs not yet made; draining: one makes them.
+// restart: the new session id of a /clear or a /resume owes its record a start. pending: calls that went to the mode's decider, by
+// their asked() key, until a dialog shows. asks: calls a person was asked about that have not returned. kids: the sub-agents whose
+// run the record shows. queue: board.py runs not yet made; draining: one makes them.
 type State = {
   registry?: string
   name?: string | null
   owed?: 'full' | 'start'
   restart?: boolean
+  pending: Map<string, string>
   asks: Set<string>
   kids: Set<string>
   queue: Job[]
@@ -116,6 +118,9 @@ const holdsCharter = (m: ApiMessage) => {
   const blocks = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content
   return m.role === 'user' && blocks.some(b => b.type === 'text' && String(b.text).startsWith(HEAD))
 }
+
+// A PermissionRequest carries no call id: its call is the pending one with the same tool, loop and input.
+const asked = (tool: string, agentId: string | undefined, input: unknown) => JSON.stringify([tool, agentId ?? null, input])
 
 const reason = (err: unknown) => (err instanceof Error ? err.message : String(err))
 const exited = (run: { exitCode: number; stderr: string }) => new Error(`board.py exited ${run.exitCode}: ${run.stderr.trim().split('\n').at(-1) ?? ''}`)
@@ -212,6 +217,7 @@ function answer(out: Out, did: { failed: string; json: string }): ToolCallResult
 // The record starts over with the session, and the sub-agents and waits this module tracks go with the run they belonged to.
 function begin($: EngineInterface, st: State, sid?: string): Promise<Out> {
   st.kids.clear()
+  st.pending.clear()
   st.asks.clear()
   return record($, st, { event: 'start' }, sid)
 }
@@ -272,7 +278,7 @@ async function renamed($: EngineInterface, st: State): Promise<boolean> {
 }
 
 export const register: Register = (on, options) => {
-  const st: State = { asks: new Set(), kids: new Set(), queue: [], draining: false }
+  const st: State = { pending: new Map(), asks: new Set(), kids: new Set(), queue: [], draining: false }
   jiraLinks(on, options)
   sessionLinks(on)
 
@@ -343,6 +349,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId === undefined) {
+      st.pending.clear()
       st.asks.clear()   // the turn's end ends the record's wait: a call still out returns to none
       void record($, st, { event: 'turn.complete', reason: e.reason, answer: e.answer })
       void mirror($, st)
@@ -350,20 +357,39 @@ export const register: Register = (on, options) => {
     return r
   })
 
-  // The wait shows the moment a call goes to the mode's decider, a dialog or the auto-mode classifier, which then reads as a dialog
-  // that answered itself. A query ($.tool.check) carries no call id and asks no one.
+  // A call that goes to the mode's decider waits for a person only once its dialog shows: auto mode's classifier settles most with
+  // none. AskUserQuestion always shows its dialog. A query ($.tool.check) carries no call id and asks no one.
   on('tool.check', async ($, e, next) => {
     const r = await next(e)
-    if (r.decision === 'ask' && e.tool_use_id !== undefined) {
+    if (r.decision !== 'ask' || e.tool_use_id === undefined) return r
+    if (e.tool !== 'AskUserQuestion') st.pending.set(e.tool_use_id, asked(e.tool, e.agentId, e.input))
+    else {
       st.asks.add(e.tool_use_id)
-      void record($, st, { event: 'ask', kind: e.tool === 'AskUserQuestion' ? 'question' : 'permission' })
+      void record($, st, { event: 'ask', kind: 'question' })
     }
     return r
   })
 
-  // A call that asked returns once it is answered: run, refused, or Esc at the dialog. The wait ends when no such call is still out.
+  // Raised as a dialog is about to show, or as a call that cannot show one is about to be refused. A settings hook that answers it
+  // asks no one.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const r = await next(e)
+    const key = asked(e.tool_name, e.agent_id, e.tool_input)
+    const id = [...st.pending].find(([, k]) => k === key)?.[0]
+    if (id === undefined) return r
+    st.pending.delete(id)
+    if (r.decision === undefined) {
+      st.asks.add(id)
+      void record($, st, { event: 'ask', kind: 'permission' })
+    }
+    return r
+  })
+
+  // A call that asked returns once it has run, been refused, or met an Esc at the dialog. No event marks a person's answer, so an
+  // approved call's wait lasts its run. The wait ends when no such call is still out.
   on('tool.call', async ($, e, next) => {
     const r = await next(e)
+    if (e.tool_use_id !== undefined) st.pending.delete(e.tool_use_id)
     if (e.tool_use_id !== undefined && st.asks.delete(e.tool_use_id) && st.asks.size === 0) void record($, st, { event: 'answered' })
     return r
   })
