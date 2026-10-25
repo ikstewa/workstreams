@@ -1315,7 +1315,7 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(len(calls), 1, calls); self.assertIn("|control|1|", calls[0]); self.assertIn("|OLD|2|", calls[0])
         self.assertEqual(self.press("go", "need", "%9"), ["display-message|workstreams: nothing needs you|"])   # rows, and none of them needs Ian
 
-    # --- Option+n: the row that most needs Ian, asks before unread and the oldest first ---
+    # --- Option+n: the next row down that needs Ian, an ask or an unread reply ---
 
     def pid(self):
         """A pid that exists until the test ends, for a live session of its own: a click attaches only the session its pid's registry names."""
@@ -1324,34 +1324,37 @@ class BoardTest(unittest.TestCase):
 
     def needy(self):
         """A live background session per row: ZED, MID and ALF asking Ian, YAK, BOB and control with his unread replies, READ with a
-        reply he has seen and IDLE waiting on nobody. Returns {key: since} for the rows that wait on him."""
+        reply he has seen and IDLE waiting on nobody. Their ages run against the sidebar's order, which alone decides Option+n's."""
         t = {h: self.ago(h) for h in (0.5, 1, 1.5, 2, 2.5, 4, 5, 6)}
         for k in ("ALF", "BOB", "IDLE", "MID", "READ", "YAK", "ZED"): self.write_charter(k)
         for key, kw in (("control", dict(kind="control", workstream=None, state="waiting", waiting_for="replied", waiting_since=t[0.5], last_turn_at=self.ago(0.6))),
                         ("ZED", dict(state="waiting", waiting_for="permission", waiting_since=t[2], last_turn_at=t[2.5])),
-                        ("ALF", dict(state="waiting", waiting_for="question", waiting_since=t[1], last_turn_at=t[4])),   # the oldest turn, not the oldest wait
-                        ("MID", dict(last_turn_at=t[1.5])),                                                             # listing blocked: its turn dates it
+                        ("ALF", dict(state="waiting", waiting_for="question", waiting_since=t[1], last_turn_at=t[4])),
+                        ("MID", dict(last_turn_at=t[1.5])),                                                             # listing blocked
                         ("YAK", dict(state="waiting", waiting_for="replied", waiting_since=t[5], last_turn_at=t[5])),
-                        ("BOB", dict(state="waiting", waiting_for="replied", last_turn_at=t[4])),                       # a reply with no since: its turn dates it
+                        ("BOB", dict(state="waiting", waiting_for="replied", last_turn_at=t[4])),                       # a reply with no since
                         ("READ", dict(state="waiting", waiting_for="replied", waiting_since=t[6], last_turn_at=t[6])),
                         ("IDLE", dict(last_turn_at=t[0.5]))):
             self.live(f"s-{key.lower()}-full", key, self.pid(), **kw)
         (self.board / "open.json").write_text(json.dumps({"seen": {"READ": self.ago(0)}}))
         self.listing(json.dumps([{"sessionId": "s-mid-full", "state": "blocked", "waitingFor": "approve push"}]))
-        return {"ZED": t[2], "MID": t[1.5], "ALF": t[1], "YAK": t[5], "BOB": t[4], "control": t[0.5]}
 
-    def test_option_n_opens_asks_then_unread_ones_oldest_first(self):
-        since = self.needy(); hits = self.hits()
-        # The line map carries need and since on a red or a yellow row only, beside the keys every row has.
-        self.assertEqual({h["key"]: (h.get("need"), h.get("since")) for h in hits.values()},
-                         {"control": ("unread", since["control"]), "ALF": ("asks", since["ALF"]), "BOB": ("unread", since["BOB"]), "IDLE": (None, None),
-                          "MID": ("asks", since["MID"]), "READ": (None, None), "YAK": ("unread", since["YAK"]), "ZED": ("asks", since["ZED"])})
-        self.assertEqual(next(h for h in hits.values() if h["key"] == "ZED"), {"key": "ZED", "session_id": "s-zed-full", "glyph": "●", "need": "asks", "since": since["ZED"]})
-        # From nothing open, each press opens the next in that order, passing over the row open now, and wraps; READ and IDLE never come up.
+    def test_option_n_opens_the_next_row_down_that_needs_ian(self):
+        self.needy(); hits = self.hits()
+        # The line map carries need on a red or a yellow row only, beside the keys every row has.
+        self.assertEqual({h["key"]: h.get("need") for h in hits.values()},
+                         {"control": "unread", "ALF": "asks", "BOB": "unread", "IDLE": None, "MID": "asks", "READ": None, "YAK": "unread", "ZED": "asks"})
+        self.assertEqual(next(h for h in hits.values() if h["key"] == "ZED"), {"key": "ZED", "session_id": "s-zed-full", "glyph": "●", "need": "asks"})
+        self.assertEqual([hits[n]["key"] for n in sorted(hits, key=int)], ["control", "ALF", "BOB", "IDLE", "MID", "READ", "YAK", "ZED"])
+        # From nothing open, each press opens the next row down that needs Ian, an ask or a reply alike, and wraps; READ and IDLE never come up.
         here, claude = "agent view", Path(self.home) / "claude.log"
-        for key in ("ZED", "MID", "ALF", "YAK", "BOB", "control", "ZED"):
+        for key in ("control", "ALF", "BOB", "MID", "YAK", "ZED", "control"):
             self.assertEqual(self.press("go", "need", "%9", title=here), self.attached(key, f"s-{key.lower()}-full"[:8]), here)
             self.assertFalse(claude.exists(), key); here = key
+        # From a row that needs nothing, the next one below it, not the first in the sidebar.
+        for here, key in (("IDLE", "MID"), ("READ", "YAK")):
+            (self.board / "open.json").write_text(json.dumps({"open": here, "seen": {"READ": self.ago(0)}}))
+            self.assertEqual(self.press("go", "need", "%9", title=here), self.attached(key, f"s-{key.lower()}-full"[:8]), here)
 
     def test_option_n_with_nothing_waiting_on_ian_starts_nothing(self):
         # Waiting on nobody: idle, working, a read reply. Waiting on Ian but passed over: the row open now, a session in another
@@ -1435,12 +1438,12 @@ class BoardTest(unittest.TestCase):
         self.assertIn("\x1b[31m●\x1b[0m \x1b[36mPERM\x1b[0m", colour); self.assertIn("\x1b[2m⏸\x1b[0m \x1b[36mREPLY\x1b[0m", colour)
 
     def test_option_n_passes_over_a_blocked_row(self):
-        # The ask under a block comes first, ahead of an older unread reply elsewhere; the blocked reply, older still, never comes up.
+        # The ask under a block is a stop like any other; the blocked reply, though unread, never comes up.
         self.blocked("PERM"); self.live("s-perm-full", "PERM", self.pid(), state="waiting", waiting_for="permission", waiting_since=self.ago(1))
         self.blocked("REPLY"); self.live("s-reply-full", "REPLY", self.pid(), state="waiting", waiting_for="replied", waiting_since=self.ago(5), last_turn_at=self.ago(5))
         self.write_charter("NEWS"); self.live("s-news-full", "NEWS", self.pid(), state="waiting", waiting_for="replied", waiting_since=self.ago(3), last_turn_at=self.ago(3))
         self.hits(); here = "agent view"
-        for key in ("PERM", "NEWS", "PERM"):
+        for key in ("NEWS", "PERM", "NEWS"):
             self.assertEqual(self.press("go", "need", "%9", title=here), self.attached(key, f"s-{key.lower()}-full"[:8]), here); here = key
 
     def test_option_n_with_only_blocked_rows_starts_nothing(self):
