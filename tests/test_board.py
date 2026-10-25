@@ -2458,6 +2458,13 @@ class BoardTest(unittest.TestCase):
                       "(load it with ToolSearch first), never `claude --bg` yourself; each worker enters its own worktree and messages you when done.",
                       self.charter_of()["text"])
 
+    def test_the_rules_start_a_fresh_worker_for_each_task(self):
+        self.write_charter()
+        text = self.charter_of()["text"]
+        for want in ("Start a new worker for each new task, a follow-up PR included, and never give a finished worker a second task",
+                     "close it with the same tool once its PR merges or its task is done"):
+            self.assertIn(want, text)
+
     def test_a_worker_of_a_charter_key_is_briefed_and_gets_no_charter(self):
         self.write_charter(extra=self.GOALS); self.become_worker()
         out = self.charter_of(); text = out.pop("text")

@@ -53,8 +53,8 @@ const WORKER: ToolSpec = {
   name: 'worker',
   description: [
     'Starts a worker of your workstream: a background session named "<KEY> work: <task>", launched from the project root. ' +
-      'The worker enters its own worktree and messages you when it finishes. Start one worker for each repo or worktree. Do not run claude --bg yourself.',
-    'Or, with close, closes one of your workers once it has reported and you have what you needed from it: the session ends, and it and its worktree are deleted. A closed worker cannot be reopened. A worker whose changes are uncommitted, or whose commits are neither on the default branch nor in a merged PR, is stopped but kept.',
+      'The worker enters its own worktree and messages you when it finishes. Start one worker for each repo or worktree, and a new one for each new task, a follow-up PR included; never send a finished worker a second task. Do not run claude --bg yourself.',
+    'Or, with close, closes one of your workers once its PR merges or its task is done and you have what you needed from it: the session ends, and it and its worktree are deleted. A closed worker cannot be reopened. A worker whose changes are uncommitted, or whose commits are neither on the default branch nor in a merged PR, is stopped but kept.',
     '',
     'Give task and prompt to start a worker, or close to close one, never both. The result has the name and the id of the worker. If the tool refuses a call, the error says why.',
     '- task: A short label for the work. It becomes the part of the name after "work: ".',
