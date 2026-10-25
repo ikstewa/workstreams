@@ -729,7 +729,8 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
                                "32" if c.get("state") == "running" else "2"))
             for j, (_, _, wcode, _, wshort, _, _, wsid, _, w) in enumerate(workers):
                 wglyph = {"31": "●", "33": "●", "32": "▶"}.get(wcode, "○")   # the branch is the lead's last column; the glyph is the session's own state
-                hits[len(out)] = {"key": key, "session_id": wsid, "glyph": wglyph, "worker": w["name"]} | need(wcode)
+                # No need: Option+n stops only at control and workstream rows, never at a worker
+                hits[len(out)] = {"key": key, "session_id": wsid, "glyph": wglyph, "worker": w["name"]}
                 out.append(row(f"  {trunk} " + ("└" if j == len(workers) - 1 else "├"), wglyph, w["task"] + (f" · {w['where']}" if w["where"] else ""), wshort,
                                tone(wcode), on=wsid == current))
     count = f"stale ({len(stale)})"; full = f"{count}: " + ", ".join(sorted(stale))
@@ -881,7 +882,8 @@ def step(way, target):
     """`board.py go next|prev|need <pane>`: from the stop open in `target` (a workstream's key, or a worker's session id), open the next (or previous) row in the sidebar's order, wrapping,
     whose click would attach: a live background session, or a retired one to revive. A row whose click would dispatch, restart or
     only explain is passed over, so a step never starts a session. With nothing open, next starts at the top and prev at the bottom.
-    need steps the same way and stops only at a row waiting on Ian: one asking him for an answer, or his unread reply."""
+    need steps the same way and stops only at a control or workstream row waiting on Ian, never a worker's: one asking him for an answer,
+    or his unread reply."""
     import functools, subprocess
     hits = tree_rows(); order = [hits[n] for n in sorted(hits, key=int)]
     if way == "prev": order.reverse()

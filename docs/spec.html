@@ -1248,7 +1248,8 @@
             only at a row that needs Ian: a red row asking him for anything but a reply (a permission, a question, or what the
             listing says the session waits for), or a yellow reply he has not read. It measures from the row open now, even one
             that needs nothing, so pressing again goes on down the sidebar. A reply he has read is passed over, and so is every
-            Blocked row, which waits on someone else, and every Snoozed row, which Ian put aside. Control counts like any row.
+            Blocked row, which waits on someone else, every Snoozed row, which Ian put aside, and every worker row and sub-agent
+            line: Option+n stops only at a workstream's own session. Control counts like any row.
             It opens only a row whose click would attach; with nothing to open it says so. Option+m opens a menu of every row, and picking an
             item is a click on that row. Option+e notes the workstream open in the right pane (below). The bindings apply only
             inside the <code>ws</code> tmux session; elsewhere each key reaches the pane unchanged.

@@ -1913,7 +1913,7 @@ class BoardTest(unittest.TestCase):
         self.assertEqual([self.group_of(wide, k) for k in ("HELD", "BUSY", "ODD")], ["Blocked", "Active", "Active"])
 
     def test_a_snooze_never_hides_an_ask_already_waiting(self):
-        # Snoozed after the ask began, so no ask event cleared it: the row stays where Ian answers it, and Option+n finds it.
+        # Snoozed after the ask began, so no ask event cleared it: the row stays where Ian answers it, and Option+n finds a workstream's own ask, never a worker's.
         self.write_charter("PERM", extra=f"snoozed_until: {self.ahead(3)}\n")
         self.put("s-perm", "PERM", self.me(), state="waiting", waiting_for="permission", waiting_since=self.ago(0.2))
         self.write_charter("WQ", extra=f"snoozed_until: {self.ahead(3)}\n")
@@ -1921,7 +1921,7 @@ class BoardTest(unittest.TestCase):
         wide, hits = self.render("--no-color"), self.hits()
         self.assertEqual([self.group_of(wide, k) for k in ("PERM", "WQ")], ["Active", "Active"])
         self.assertNotIn("▾ Snoozed", self.tree(40))
-        self.assertEqual({h["key"]: h.get("need") for h in hits.values() if h.get("need")}, {"PERM": "asks", "WQ": "asks"})
+        self.assertEqual({h["key"]: h.get("need") for h in hits.values() if h.get("need")}, {"PERM": "asks"})
 
     def test_snooze_and_unsnooze_write_only_their_line_and_a_snooze_ends_the_pin(self):
         import calendar
@@ -2489,7 +2489,7 @@ class BoardTest(unittest.TestCase):
             self.assertEqual((row.startswith(head), row.endswith(label), len(row)), (True, True, 40), row)
         self.assertEqual(lines[i + 3], "─" * 40)   # the dead worker draws nothing
         self.assertEqual({n: (h["session_id"], h.get("worker"), h.get("need")) for n, h in hits.items() if h["key"] == "WS"},
-                         {i: ("a-full", None, None), i + 1: ("w-audit", "WS work: audit", "asks"), i + 2: ("w-sweep", "WS work: sweep", None)})
+                         {i: ("a-full", None, None), i + 1: ("w-audit", "WS work: audit", None), i + 2: ("w-sweep", "WS work: sweep", None)})   # a worker's ask is no stop for Option+n
         wide = self.render("--no-color").splitlines()
         self.assertFalse(any("[duplicate]" in l for l in wide))   # a worker is no second head
         self.assertEqual([l.split()[:3] for l in wide if l.startswith("    ")], [["WS", "work:", "audit"], ["WS", "work:", "sweep"]])
