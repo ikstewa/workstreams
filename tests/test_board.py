@@ -819,6 +819,16 @@ class BoardTest(unittest.TestCase):
         self.assertIn("the goals still open, and any block it is waiting on and whether it still holds.", args)
         self.later(); self.assertEqual(self.open_line(4, "Error: not logged in"), ["display-message|DORM: Error: not logged in|"])   # never a guessed id
 
+    def test_a_session_id_opens_its_row_in_the_right_pane_of_ws(self):
+        me = self.me()
+        (Path(self.home) / ".claude" / "sessions" / f"{me}.json").write_text(json.dumps({"pid": me, "sessionId": "s-bg-full", "kind": "bg", "jobId": "s-bg-fu"}))
+        self.put("s-bg-full", "LIVE", me)
+        (self.board / "tree-rows.json").write_text(json.dumps({"2": {"key": "LIVE", "session_id": "s-bg-full"}}))
+        panes = "%1 uv run --no-project board.py render --watch --tree\n%9 claude attach 545e4971"
+        self.assertEqual(self.board_py("open-session", "s-bg-full", panes=panes),
+                         ["list-panes|-t|ws|-F|#{pane_id} #{pane_start_command}|", "respawn-pane|-k|-t|%9|claude attach s-bg-fu|", "set|-p|-t|%9|@ws_name|LIVE|"])
+        self.assertEqual(self.board_py("open-session", "s-not-on-the-board", panes=panes)[1:], [])
+
     # --- the open row: the sidebar marks what the right pane shows ---
 
     def panes(self, *lines, code=0):

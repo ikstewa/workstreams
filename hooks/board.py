@@ -835,6 +835,15 @@ def open_row(line, target, x=None, client=None):
         return snooze(entry["key"]) if found and snoozed(found[1]) else snooze_menu(entry["key"], client)
     perform(entry, judge(entry, x), target)
 
+def open_session(sid):
+    """`board.py open-session <session id>`: a click on a session id in a reply, run by the mod. It opens the id's sidebar row as a
+    click on the row does, in the ws session's right pane, found as bin/ws finds it: the pane not running the sidebar."""
+    import subprocess
+    entry = next((e for e in tree_rows().values() if e.get("session_id") == sid), None)
+    p = subprocess.run(["tmux", "list-panes", "-t", "ws", "-F", "#{pane_id} #{pane_start_command}"], capture_output=True, text=True)
+    right = next((l.split()[0] for l in p.stdout.splitlines() if "render --watch --tree" not in l), None)
+    if entry and right and p.returncode == 0: perform(entry, judge(entry), right)
+
 def focus(entry, target):
     """A click on a goal in the panel: "Focus on this goal: <goal>" into the session open in `target`, and Enter, as Ian would type it.
     A bracketed paste, so a vim-mode prompt takes it as text in NORMAL mode too; a turn that is running queues it.
@@ -992,6 +1001,7 @@ def main():
     if sys.argv[1:2] == ["tick"]: sync(sys.argv[2], sys.argv[3]); return
     if sys.argv[1:2] == ["open"]:
         open_row(int(sys.argv[2]), sys.argv[3], int(sys.argv[4]) if sys.argv[4:] else None, sys.argv[5] if sys.argv[5:] else None); return
+    if sys.argv[1:2] == ["open-session"]: open_session(sys.argv[2]); return
     if sys.argv[1:2] == ["go"]: step(*sys.argv[2:4]); return
     if sys.argv[1:2] == ["menu"]: menu(*sys.argv[2:4]); return
     if sys.argv[1:2] == ["note"]: note(*sys.argv[2:4]); return
