@@ -79,7 +79,7 @@ type Charter = { registry?: string; name?: string | null; key?: string; text?: s
 
 // What `board.py event` applies to the record, each with what it carries.
 type Board =
-  | { event: 'start' | 'turn.start' | 'answered' }
+  | { event: 'start' | 'turn.start' | 'answered' | 'prompt' }
   | { event: 'turn.complete'; reason: string; answer: string }
   | { event: 'ask'; kind: 'permission' | 'question' }
   | { event: 'child.start'; agent_id: string; name: string }
@@ -317,6 +317,9 @@ export const register: Register = (on, options) => {
       st.restart = false
       void begin($, st)
     }
+    // Ian's own prompt, at the terminal or through Remote Control, stamps the dispatcher's lease. A peer's message, a task notification
+    // or a sub-agent's handback raises this event too, under another origin.
+    if (e.origin?.kind === 'composer' || e.origin?.kind === 'bridge') void record($, st, { event: 'prompt' })
     void mirror($, st)
     return next(e)
   })

@@ -813,8 +813,14 @@
         <section id="control">
           <div class="sec-head"><span class="idx">03</span><h2>Control</h2></div>
           <p>
-            <strong>Control</strong> is one session, named <code>control</code>, that belongs to no workstream. It
-            is the only session Ian keeps in the foreground by default.
+            The board's Control header holds two sessions that belong to no workstream: <strong>control</strong>, the
+            passive view, and <strong>the dispatcher</strong>, the active one. Each is a session by its name,
+            <code>control</code> or <code>dispatcher</code>, and the sidebar always draws a row for each (§9).
+          </p>
+          <h3>Control, the passive view</h3>
+          <p>
+            Control is the only session Ian keeps in the foreground by default. It reads the board and answers what Ian asks;
+            it never acts on a session unasked.
           </p>
           <p><strong>Control owns the workstream level and the cross-workstream policy:</strong></p>
           <ul>
@@ -826,13 +832,67 @@
           <p>
             <strong>Control holds no state.</strong> Every answer is re-derived from the records, the registry, and
             on request GitHub PRs and Jira. Forwarded events are one line each. Ian can <code>/clear</code> it at
-            will; the name survives, and the next board rebuilds the picture. A session is control by its name,
-            <code>control</code>, which is also how other sessions address it as <code>@control</code>.
+            will; the name survives, and the next board rebuilds the picture. Other sessions address it as
+            <code>@control</code>.
           </p>
           <p>
             <strong>Control never plans a workstream inside itself.</strong> Forty minutes of one workstream's
             design would fill its context and make it a member instead of the reader. It dispatches the
             workstream's active session and stays out of it.
+          </p>
+          <h3>The dispatcher, the active view</h3>
+          <p>
+            The dispatcher keeps every manager (a pinned workstream's active session) and every worker of one busy, so that no
+            session waits at a watering hole: idle on a step already settled, or on a PR that has moved. It runs on Sonnet in
+            auto mode with <code>/workstreams:dispatch</code> as its first prompt, started from its sidebar row as control is.
+            It is one session beside control, not a mode of it, because its model and its lifetime differ: control is a
+            strong model Ian talks to, the dispatcher a cheap one that reacts to a stream of events.
+          </p>
+          <p>
+            <strong>It acts only while Ian is engaged.</strong> The mod stamps <code>prompted_at</code> on a session's record
+            each time Ian submits a prompt there (§7), and Ian is engaged while the newest stamp across every record is under
+            twenty minutes old. The lease is one function, <code>engaged()</code>, which the watch and the sidebar both
+            read. When it lapses the watch prints one <code>PAUSED</code> line and exits, and the dispatcher ends that turn
+            without messaging anyone: a nudge nobody sees only starts work Ian cannot steer. On Ian's next prompt to the
+            dispatcher it starts the watch again, which first prints what changed since its last saved look, and the reply leads
+            with that gap.
+          </p>
+          <p>
+            <strong>The watch</strong>, <code>board.py watch</code>, runs under the dispatcher's Monitor tool and prints one
+            line per change in the live managers and workers of pinned workstreams, read every ten seconds: a turn finished;
+            a new permission or question wait, once for a run of prompts within one turn; a session appearing or ending; a
+            sub-agent finishing; context crossing 50, 70 or 85% of a one-million-token window. It keeps its last look in
+            <code>board/dispatcher.json</code> (§6), so a watch started again reports the gap.
+          </p>
+          <p>
+            <strong>The idle hunt.</strong> A manager or worker that is not working, not asking and has no sub-agent running
+            for five minutes gets one <code>IDLE</code> line with its last message. An idle stretch runs from the end of its
+            last turn, so the line comes once a stretch, and the next turn starts a new one.
+          </p>
+          <p>
+            <strong>PRs.</strong> The watch reads the PRs named in pinned charters' <code>blocked:</code> lines, as a URL or
+            <code>owner/repo#n</code>, and those Ian names to the dispatcher, kept in <code>dispatcher.json</code>. Every twenty
+            seconds one <code>gh api graphql</code> query reads all of them, and a line marks a merge or a close, a new head,
+            a review decision and a merge state that changed. A merge marks every open watched PR of the same repository, and
+            the next look that finds one of them <code>DIRTY</code> or <code>BEHIND</code> says so as caused by that merge,
+            whether or not its state changed: a sibling's merge is the commonest watering hole, and a PR already behind is
+            further behind after it. GitHub answers <code>UNKNOWN</code> until it has recomputed, so the mark waits past that.
+            The board calls nothing outside the machine (§8); the watch reads GitHub, and only while Ian is engaged.
+          </p>
+          <p>
+            <strong>Authority.</strong> The dispatcher acts only on what a charter or Ian already settled. It relays a merge to
+            the manager whose record says what follows; it nudges an idle session onto a step that its own last message or its
+            charter's focus names and that needs nothing from Ian, once a stretch, and a session still idle after the nudge goes
+            on Ian's list; it tells a manager whose PR is <code>DIRTY</code> or <code>BEHIND</code> to merge master, and the push
+            stays that manager's ask to Ian. At 70% context on an idle session it has the manager write its charter record and
+            hands Ian a <code>/compact</code> line to paste, since a slash command sent as a message arrives as text. New
+            decisions, merges, pushes, restarts and anything that leaves the machine go to Ian.
+          </p>
+          <p>
+            <strong>One Needs-Ian list.</strong> Each reply leads with one deduplicated list of what waits on Ian, current rather
+            than a replay of events: idle sessions whose next step is his go, longest idle first, then held approvals, then the
+            rest. The dispatcher writes it to <code>dispatcher.json</code> with <code>board.py needs</code>, and the sidebar's
+            count reads it. It sends a push notification only for a new blocking item.
           </p>
         </section>
 
@@ -985,7 +1045,7 @@
           <div class="sec-head"><span class="idx">06</span><h2>The board</h2></div>
           <p>
             The board is a directory of small JSON files, one per session keyed by session id, plus
-            <code>control.json</code>, at
+            <code>control.json</code> and the dispatcher's <code>dispatcher.json</code>, at
             <code>~/.claude/projects/&lt;project&gt;/board/</code>. Every session in a project
             and any of its worktrees resolves to that directory: <code>board.py</code>
             strips the <code>/.worktrees/…</code> suffix from the project path to reach it. It is
@@ -994,11 +1054,17 @@
             <code>memory/</code>, not inside it, so nothing on the board is recalled into context.
           </p>
           <p>
-            <strong>A record carries</strong> the session id and pid, the workstream from the name, whether the session
-            is the active one or a worker, cwd and repo and branch, state (<code>busy</code>,
+            <strong>A record carries</strong> the session id and pid, the workstream from the name, its kind (the active
+            session, a worker, or <code>control</code> or <code>dispatcher</code>, which carry no workstream), cwd and repo and branch, state (<code>busy</code>,
             <code>idle</code>, <code>waiting</code>, <code>ended</code>), what it is waiting for and since when, the last
             assistant message truncated, its children with their states, context size and cache warmth written by the
-            statusline, and timestamps.
+            statusline, and timestamps, among them <code>prompted_at</code>, the last time Ian submitted a prompt in that
+            session, which a start keeps and the dispatcher's lease reads (§3).
+          </p>
+          <p>
+            <strong><code>dispatcher.json</code> is the dispatcher's own state</strong>: the watch's last look at the sessions
+            and the PRs, the PRs Ian named to watch, and the dispatcher's current Needs-Ian list. The watch and the dispatcher's
+            <code>board.py needs</code> and <code>board.py pr</code> each write only their own keys, under the board's lock.
           </p>
           <p>
             <strong>Registration is involuntary.</strong> The mod writes the record from the engine's own events, one
@@ -1148,6 +1214,7 @@
             <thead><tr><th>Mod event</th><th>Board transition</th><th>Forwarded to control</th></tr></thead>
             <tbody>
               <tr><td><code>session.start</code>; after <code>/clear</code> or <code>/resume</code>, the session id the process goes on under, once it shows: no event marks it, so the mod looks every 50 ms for 5 s, and a prompt that comes first, or the first after the last look, starts it instead; a <code>/rename</code> seen on a prompt while no turn runs</td><td>creates or refreshes the record: identity from the registry, <code>idle</code>, no wait, no children; keeps <code>started_at</code> and <code>last_turn_at</code></td><td>No</td></tr>
+              <tr><td><code>prompt.submit</code> whose origin is Ian's own, at the terminal or through Remote Control; not a peer's message, a task notification, a scheduled prompt or a plugin's</td><td>stamps <code>prompted_at</code></td><td>No</td></tr>
               <tr><td><code>turn.start</code>, every main-loop turn, typed or not</td><td><code>busy</code>; clears <code>waiting_for</code>; stamps <code>last_turn_at</code></td><td>No</td></tr>
               <tr><td><code>turn.complete</code>, answered, refused or failed</td><td><code>waiting</code> / <code>replied</code>, shown as <code>unread</code>; records <code>last_message</code>, keeping the last one when the answer is empty; stamps <code>last_turn_at</code>. Renders as Working while a child runs; shows as <code>read</code>, dimmed, once Ian has opened that workstream from the sidebar since the reply (<code>board/open.json</code>)</td><td class="ok">Yes</td></tr>
               <tr><td><code>turn.complete</code>, aborted (Esc)</td><td><code>idle</code>; clears <code>waiting_for</code>; stamps <code>last_turn_at</code></td><td>No</td></tr>
@@ -1237,6 +1304,16 @@
             shows its workstream's charter.
           </p>
           <p>
+            <strong>The Control header always draws two rows</strong>, <code>◆ control</code> and then
+            <code>◇ dispatcher</code>, each <code>click to open</code> while no such session is live. A click on either opens
+            the live one, starts one when none is live, and replaces one that is cold and not working. Control's row shows its
+            session's state as any row does. The dispatcher's shows its lease: <code>watching</code>, with
+            <code>· N need you</code> from its Needs-Ian list when that is not empty, while Ian is engaged, and
+            <code>paused · away 16m</code> once he is not. An ask or an unread reply shows over either, in its red or yellow,
+            and is what Option+n stops on. The wide board lists a live dispatcher under control with what it watches, the count
+            and how long the lease has left, or when it paused.
+          </p>
+          <p>
             A click on a row opens its session in the right pane (§4). tmux passes the click's column with its line, and a
             click on a cold row's <code>↻</code> glyph, or the space after it, resets that session instead.
           </p>
@@ -1249,7 +1326,7 @@
             listing says the session waits for), or a yellow reply he has not read. It measures from the row open now, even one
             that needs nothing, so pressing again goes on down the sidebar. A reply he has read is passed over, and so is every
             Blocked row, which waits on someone else, every Snoozed row, which Ian put aside, and every worker row and sub-agent
-            line: Option+n stops only at a workstream's own session. Control counts like any row.
+            line: Option+n stops only at a workstream's own session. Control and the dispatcher count like any row.
             It opens only a row whose click would attach; with nothing to open it says so. Option+m opens a menu of every row, and picking an
             item is a click on that row. Option+e notes the workstream open in the right pane (below). The bindings apply only
             inside the <code>ws</code> tmux session; elsewhere each key reaches the pane unchanged.
@@ -1323,10 +1400,10 @@
           </p>
           <ul>
             <li>
-              <strong>By construction.</strong> The hook acts only on a session named <code>control</code> or bound by name
-              to a workstream charter. Every other session gets a board record under its derived name and nothing else: no
-              injected context, no holds, no forwarding. The charter interview, the board and the dispatch recipe are skills
-              invoked on purpose.
+              <strong>By construction.</strong> The hook acts only on a session named <code>control</code> or
+              <code>dispatcher</code> or bound by name to a workstream charter. Every other session gets a board record under its
+              derived name and nothing else: no injected context, no holds, no forwarding. The charter interview, the board, the
+              dispatch recipe and the dispatcher's <code>/workstreams:dispatch</code> are skills invoked on purpose.
             </li>
             <li>
               <strong>By packaging.</strong> The hook, the skill and the statusline snippet ship as a plugin, provisionally
@@ -1354,6 +1431,7 @@
                 <li>Every charter has goals, and every goal ticked is its stopping condition. A charter without them is flagged, not refused; one with every goal ticked is proposed for closing, never closed on its own.</li>
                 <li>A block lives on the charter, set and cleared only by the workstream's session; anything Ian can act on shows in Active over it.</li>
                 <li>One control session, stateless, belonging to no workstream.</li>
+                <li>The dispatcher is a separate session, not a mode of control: its model and its lifetime differ.</li>
                 <li>One active session per workstream, background by default, no roles.</li>
                 <li>A click reopens a row's own session and a reset replaces it; no prompt is held; capture is continuous; work lives in sub-agents and workers.</li>
                 <li>The agent view is the switcher; tabs are an escape hatch.</li>
