@@ -2265,8 +2265,15 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(said, {"ok": True, "summary": 'started "PAYMENTS_API work: fix the thing", id 9d9d9d9d'})
         self.assertEqual((Path(self.home) / "claude.cwd").read_text().strip(), str(root))
         self.assertEqual((Path(self.home) / "claude.argv").read_text().splitlines(),
-                         ["--bg", "-n", "PAYMENTS_API work: fix the thing", "--permission-mode", "auto", "Do it, 'quoted' once."])
+                         ["--bg", "-n", "PAYMENTS_API work: fix the thing", "--model", "sonnet", "--permission-mode", "auto", "Do it, 'quoted' once."])
         self.assertEqual((Path(self.home) / "claude.env").read_text(), "unset")   # the worker is no session of the worktree this ran in
+
+    def test_a_worker_runs_on_sonnet_unless_its_manager_picks_opus(self):
+        root, wt, env = self.worker_home()
+        self.assertEqual(self.start_worker(env, wt, task="x", prompt="p", model="haiku"), {"error": "model must be sonnet or opus"})
+        self.assertFalse((Path(self.home) / "claude.argv").exists())
+        self.start_worker(env, wt, task="x", prompt="p", model="opus")
+        self.assertEqual((Path(self.home) / "claude.argv").read_text().splitlines()[3:5], ["--model", "opus"])
 
     def test_the_worker_tool_refuses_what_it_cannot_start(self):
         root, wt, env = self.worker_home()
@@ -2724,6 +2731,10 @@ class BoardTest(unittest.TestCase):
         self.assertIn("Your workstream belongs to project SHOP. Never message another workstream's sessions, not even an FYI. Anything you need from one, "
                       "or that one needs from you, goes to SHOP, which decides and relays.", text)
         self.assertLess(text.index("belongs to project SHOP"), text.index("\n---\n"))   # in the rules, ahead of the frontmatter
+        self.assertIn("Workers run on Sonnet: give the worker tool model opus only for a design-heavy task, and say why in your report.", text)
+        self.assertIn("SHOP runs at most 4 workers at once across its workstreams: before you start one past that, ask SHOP.", text)
+        self.project(extra="worker_cap: 2\n"); self.write_charter(extra="project: SHOP\n")
+        self.assertIn("SHOP runs at most 2 workers at once", self.charter_of()["text"])
 
     def look(self, turn, idle=True, **kw):
         return {"ws": "ALPHA", "kind": "active", "name": "ALPHA", "ctx": 0, "band": 0, "state": "waiting", "why": "replied", "turn": turn,
@@ -2789,6 +2800,16 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(mod.dstate("SHOP")["snapshot"]["sessions"]["s-alpha-"]["said"][1], "replied")   # a re-armed watch does not say it again
         self.put("s-alpha-full", "ALPHA", self.me(), prompted_at=self.at(21))
         self.assertRegex("\n".join(self.watch_once(mod)), r"^PAUSED: no prompt from Ian since \d\d:\d\d$")
+
+    def test_the_watch_says_each_worker_started_past_the_projects_cap(self):
+        self.project(members=("ALPHA",), extra="worker_cap: 1\n"); self.write_charter("BETA"); mod = self.mod_env()
+        self.put("s-alpha-full", "ALPHA", self.me(), prompted_at=self.at(1))
+        work = lambda n, ws="ALPHA": self.put(f"s-w{n}-full", ws, self.me(), kind="worker", name=f"{ws} work: t{n}")
+        work(9, "BETA"); self.watch_once(mod)   # the first look arms; a non-member's worker counts toward no cap of SHOP's
+        work(1); self.assertFalse([l for l in self.watch_once(mod) if l.startswith("WORKERS")])   # at the cap, not past it
+        work(2); self.assertIn("WORKERS 2 running, cap 1", self.watch_once(mod))
+        self.assertFalse([l for l in self.watch_once(mod) if l.startswith("WORKERS")])   # said once until another starts
+        work(3); self.assertIn("WORKERS 3 running, cap 1", self.watch_once(mod))
 
     def test_the_watch_says_the_5h_quota_crossing_70_and_90_once_a_window(self):
         self.project(); self.put("s-ian", "X", None, prompted_at=self.at(1)); mod = self.mod_env()

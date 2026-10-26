@@ -752,13 +752,13 @@ test('a worker of a charter key is briefed and offered neither tool; a worker of
   expect(loose.w.rows).toEqual([])
 })
 
-test('the worker tool is three optional strings, written as sentences', async () => {
+test('the worker tool is four optional strings, written as sentences', async () => {
   const { w, fire } = harness()
   await fire.start()
   const spec = w.tools.find(t => t.name === 'worker')
   expect(spec?.inputSchema).toMatchObject({ additionalProperties: false })
   expect(spec?.inputSchema).not.toHaveProperty('required')   // board.py checks which of start or close a call is
-  expect(Object.keys((spec?.inputSchema as { properties: object }).properties)).toEqual(['task', 'prompt', 'close'])
+  expect(Object.keys((spec?.inputSchema as { properties: object }).properties)).toEqual(['task', 'prompt', 'model', 'close'])
   expect(spec?.description.split('\n').filter(l => l !== '' && !l.endsWith('.'))).toEqual([])   // no break inside a sentence
 })
 
@@ -768,6 +768,12 @@ test('a worker call queues one launch with its task and prompt, answers with the
   expect(w.launches).toEqual([{ sid: 's1', fields: { task: 'fix', prompt: 'Do it.' }, timeoutMs: 50_000 }])
   expect(w.jobs).toEqual(['worker s1'])
   expect(w.core).toEqual([])
+})
+
+test('a worker call passes its model to board.py', async () => {
+  const { w, fire } = harness()
+  await fire.call(WORKER_TOOL, 't1', { task: 'design', prompt: 'Do it.', model: 'opus' })
+  expect(w.launches).toEqual([{ sid: 's1', fields: { task: 'design', prompt: 'Do it.', model: 'opus' }, timeoutMs: 50_000 }])
 })
 
 test('a worker call with close queues it for board.py with the id', async () => {

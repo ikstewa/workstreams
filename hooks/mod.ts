@@ -59,6 +59,7 @@ const WORKER: ToolSpec = {
     'Give task and prompt to start a worker, or close to close one, never both. The result has the name and the id of the worker. If the tool refuses a call, the error says why.',
     '- task: A short label for the work. It becomes the part of the name after "work: ".',
     '- prompt: The worker\'s brief. The worker does not see this conversation: say what to do, in which repo, and what to report.',
+    '- model: sonnet, the default, or opus. Give opus only for a design-heavy task, and say why in your report.',
     '- close: The id of the worker to close, as the start result printed it.',
     '',
     'Only the main session can use this tool. A sub-agent cannot.',
@@ -68,6 +69,7 @@ const WORKER: ToolSpec = {
     properties: {
       task: { type: 'string', description: 'A short label for the work.' },
       prompt: { type: 'string', description: 'The worker\'s brief.' },
+      model: { type: 'string', enum: ['sonnet', 'opus'], description: 'The worker\'s model: sonnet unless the task is design-heavy.' },
       close: { type: 'string', description: 'The id of the worker to close.' },
     },
     additionalProperties: false,
@@ -411,7 +413,7 @@ export const register: Register = (on, options) => {
   // The worker tool, answered the same way. board.py runs `claude --bg` from the project root, which returns at once and is cut off at 6 s.
   on('tool.call', { tool: WORKER_TOOL }, async ($, e) => {
     if (e.agentId !== undefined) return { deny: 'only the main session starts a worker' }
-    const fields = { task: e.task, prompt: e.prompt, close: e.close }
+    const fields = { task: e.task, prompt: e.prompt, model: e.model, close: e.close }
     return answer(await queue($, st, { cmd: 'worker', stdin: () => JSON.stringify(fields), timeoutMs: 50_000, what: 'worker not started' }),
       { failed: 'the worker was not started', json: 'the worker launch answered no JSON' })
   })

@@ -747,7 +747,8 @@
           <p>
             <strong>A project, when the workstream belongs to one.</strong> A project is a charter in the same directory with
             <code>kind: project</code>, so it binds, injects and is written as any charter is, goals, block, note and status
-            included, and adds <code>repos:</code>, the <code>owner/repo</code> list its members work in. Membership lives on the
+            included, and adds <code>repos:</code>, the <code>owner/repo</code> list its members work in, and
+            <code>worker_cap:</code>, how many workers its members run at once, 4 when unset. Membership lives on the
             member: <code>project: &lt;KEY&gt;</code> on the workstream's charter, which <code>board.py join &lt;KEY&gt;
             &lt;PROJECT&gt;</code> writes and <code>board.py leave &lt;KEY&gt;</code> removes, one line from a fresh read under the
             lock. Both refuse a key with no charter and a project key whose charter is not <code>kind: project</code>. A project's
@@ -894,6 +895,12 @@
             once a window. Each reply of the manager opens with the 5h and 7d percent, the reset time and the reading's age,
             from <code>board.py quota</code>. At 90% or more it starts no new workers, asks the managers to hold new ones,
             batches its messages harder, and tells Ian before work stalls.
+          </p>
+          <p>
+            <strong>Workers.</strong> A worker runs on Sonnet; its manager gives the worker tool <code>model: opus</code> only for a
+            design-heavy task and says why in its report. A project's members run at most its <code>worker_cap:</code> workers at once:
+            the chain-of-command rule tells a manager to ask the project before starting one past it, and the watch prints
+            <code>WORKERS N running, cap C</code> for each worker that starts past it, which the project manager answers by having that manager hold new ones.
           </p>
           <p>
             <strong>Chain of command.</strong> Members never message each other, not even an FYI: what one needs from another

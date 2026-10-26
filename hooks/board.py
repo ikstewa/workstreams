@@ -313,11 +313,12 @@ def worker(sid, req):
         except (OSError, subprocess.SubprocessError) as err: return {"error": f"closing failed: {err}"}
         return {"error": f"claude rm failed: {oneline(out)}"} if code else {"ok": True, "summary": f'closed "{name}"'}
     if not all(isinstance(req.get(k), str) and req[k].strip() for k in ("task", "prompt")): return {"error": "task and prompt must be text"}
+    if (model := req.get("model") or "sonnet") not in ("sonnet", "opus"): return {"error": "model must be sonnet or opus"}
     if not (b := bound(sid)): return {"error": "this session is not bound to a workstream"}
     name = f"{b[0]['workstream']} work: {' '.join(req['task'].split())}"
     env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}   # the worker is not a session of the cwd this ran in
     # ponytail: the 6 s bound sits under the mod's run limit, so a hung claude reaches the model as its why
-    try: wid, why = launch(name, ["--permission-mode", "auto", req["prompt"]], 6, cwd=project_root(), env=env)
+    try: wid, why = launch(name, ["--model", model, "--permission-mode", "auto", req["prompt"]], 6, cwd=project_root(), env=env)
     except (OSError, subprocess.TimeoutExpired) as err: return {"error": f"claude --bg failed: {err}"}
     return {"ok": True, "summary": f'started "{name}", id {wid}'} if wid else {"error": f"claude --bg started nothing: {why or 'it printed nothing'}"}
 
@@ -326,6 +327,7 @@ BOUND_RULES = ("You are the active session for this workstream. Work through sub
                "(load it with ToolSearch first), never `claude --bg` yourself; each worker enters its own worktree and messages you when done. "
                "Start a new worker for each new task, a follow-up PR included, and never give a finished worker a second task: "
                "a reused worker carries all of its context into every call. "
+               "Workers run on Sonnet: give the worker tool model opus only for a design-heavy task, and say why in your report. "
                "When a worker reports, confirm you have what you needed from it, then close it with the same tool once its PR merges or its task is done; "
                "until then, reply to it. "
                "Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the mcp__workstreams__charter tool: "
@@ -346,7 +348,8 @@ BOUND_RULES = ("You are the active session for this workstream. Work through sub
                "and the next session started fresh from the charter.")
 CHAIN = (" Your workstream belongs to project {p}. Never message another workstream's sessions, not even an FYI. Anything you need from one, "
          "or that one needs from you, goes to {p}, which decides and relays. Report up to {p} in one line when you open, merge or close a PR, "
-         "when you set or clear a block, and when you change something another workstream may depend on, such as a shared repo, schema, API or release.")
+         "when you set or clear a block, and when you change something another workstream may depend on, such as a shared repo, schema, API or release. "
+         "{p} runs at most {cap} workers at once across its workstreams: before you start one past that, ask {p}.")
 
 WORKER_BRIEF = ("# Workstream charter (worker of {key})\n\n"
                 "You are a worker of workstream {key}. You start at the project root: enter your own worktree before you edit anything. "
@@ -367,7 +370,7 @@ def charter_text(path, fm, body, refresh=False):
             if l.startswith("goals:"): keep.append(f"# {len(gone)} done goals omitted")
             pos += len(l) + 1
         fm = "\n".join(keep)
-    chain = CHAIN.format(p=p) if (p := scalar(fm, "project")) else ""
+    chain = CHAIN.format(p=p, cap=cap_of(projects().get(p, ""))) if (p := scalar(fm, "project")) else ""
     text = f"# Workstream charter ({path})\n\n# Operating rules\n{BOUND_RULES}{chain}\n\n---\n{fm}\n---"
     if refresh: return text
     body = body.strip()
@@ -522,6 +525,11 @@ def projects(chart=None):
 
 members = lambda p, chart=None: [k for k, (fm, _) in (chart or charters()).items() if scalar(fm, "project") == p]   # derived, never stored on the project
 repos = lambda fm: re.findall(r"[\w.-]+/[\w.-]+", scalar(fm, "repos") or "")   # a project's repos: line, owner/repo each
+WORKER_CAP = 4   # workers a project runs at once unless its charter's worker_cap: says otherwise
+
+def cap_of(fm):
+    try: return int(scalar(fm, "worker_cap") or WORKER_CAP)
+    except ValueError: return WORKER_CAP
 
 def listing():
     """sessionId -> `claude agents --json --all` row. A state source only; any failure is no extra state."""
@@ -1143,7 +1151,7 @@ def pr_changes(old, new, after, rs):
 
 def watch(p):
     """`board.py watch <PROJECT>`, run by p's manager under its Monitor tool: one line per change in its members' live sessions and the PRs
-    their work waits on, and a QUOTA line, until Ian has typed no prompt for ENGAGED_MINUTES. A re-armed watch first says what changed since the saved look."""
+    their work waits on, a WORKERS line past the cap and a QUOTA line, until Ian has typed no prompt for ENGAGED_MINUTES. A re-armed watch first says what changed since the saved look."""
     import itertools
     say = lambda line: print(line, flush=True)
     last = dstate(p).get("snapshot"); old = last or {"sessions": {}, "prs": {}, "after": {}}
@@ -1153,6 +1161,8 @@ def watch(p):
             if not on: return say("PAUSED: no prompt from Ian " + (f"since {time.strftime('%H:%M', time.localtime(time.time() - s))}" if s is not None else "yet"))
             new = {"sessions": sessions(records, p), "prs": old["prs"], "after": dict(old["after"]), "quota": old.get("quota", [None, 0])}
             lines = list(changes(old["sessions"], new["sessions"]))
+            new["workers"] = n = sum(s["kind"] == "worker" for s in new["sessions"].values())
+            if n > (cap := cap_of(projects().get(p, ""))) and n > old.get("workers", 0): lines.append(f"WORKERS {n} running, cap {cap}")
             if "five_hour" in (q := limits()):   # quota: [the window's reset, the highest of QUOTA said in it]
                 pct, at = q["five_hour"]; said = new["quota"][1] if new["quota"][0] == at else 0
                 if (band := max([b for b in QUOTA if pct >= b], default=0)) > said: lines.append(f"QUOTA {quota_line(q)}")
