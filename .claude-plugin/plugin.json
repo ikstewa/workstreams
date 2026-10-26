@@ -13,6 +13,12 @@
       "multiple": true,
       "title": "Jira project keys",
       "description": "The Jira project keys to link, such as PROJ or OPS. Unset, no key is linked."
+    },
+    "githubRepos": {
+      "type": "string",
+      "multiple": true,
+      "title": "GitHub repositories",
+      "description": "The repositories whose refs link, as owner/repo, such as octo-org/widgets; a reply's widgets #12 then links to that issue or pull request. Unset, no ref is linked."
     }
   }
 }
