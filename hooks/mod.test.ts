@@ -206,8 +206,8 @@ function harness(name: string | null = 'PAYMENTS_API') {
       await w.tick()
       return r
     },
-    prompt: (text: string, turnId?: string) =>
-      dispatch(() => call('prompt.submit', { text, wait: false, origin: { kind: 'composer' }, ...(turnId === undefined ? {} : { turnId }) },
+    prompt: (text: string, turnId?: string, origin = 'composer') =>
+      dispatch(() => call('prompt.submit', { text, wait: false, origin: { kind: origin }, ...(turnId === undefined ? {} : { turnId }) },
         async (e: { text: string }) => (w.events.push(`prompt ${e.text}`), w.order.push(`prompt ${e.text}`), { text: e.text }))),
     turn: (text = 'go') => dispatch(() => call('turn.start', { text, turnId: 't1' }, async (e: { turnId: string }) => ({ turnId: e.turnId }))),
     complete: (reason: TurnCompleteReason, answer = '', agentId?: string) =>
@@ -587,7 +587,7 @@ for (const reason of ['clear', 'resume'] as const) {
     expect(w.order).toEqual(['board start s1', 'board end s1', 'board start s2'])
     await fire.prompt('first')
     await fire.prompt('second')
-    expect(w.order).toEqual(['board start s1', 'board end s1', 'board start s2', 'prompt first', 'prompt second'])
+    expect(w.order).toEqual(['board start s1', 'board end s1', 'board start s2', 'prompt first', 'board prompt s2', 'prompt second', 'board prompt s2'])
     expect(w.events).toEqual(['full PAYMENTS_API', 'full PAYMENTS_API', 'prompt first', 'prompt second'])   // the charter is still owed to the prompt
     expect(w.timers).toEqual([])
   })
@@ -599,7 +599,7 @@ test("a prompt that comes before the new id is seen starts its record, and the l
   w.sid = 's2'
   await fire.prompt('quick')
   await w.tick(5_000)
-  expect(w.sent.map(s => `${s.ev.event} ${s.sid}`)).toEqual(['end s1', 'start s2'])
+  expect(w.sent.map(s => `${s.ev.event} ${s.sid}`)).toEqual(['end s1', 'start s2', 'prompt s2'])
 })
 
 test('a look that never sees a new id gives up after 5 s, and the next prompt starts the record', async () => {
@@ -613,7 +613,14 @@ test('a look that never sees a new id gives up after 5 s, and the next prompt st
   await w.tick(1_000)
   expect(events(w)).toEqual(['end'])
   await fire.prompt('late')
-  expect(w.sent.map(s => `${s.ev.event} ${s.sid}`)).toEqual(['end s1', 'start s2'])
+  expect(w.sent.map(s => `${s.ev.event} ${s.sid}`)).toEqual(['end s1', 'start s2', 'prompt s2'])
+})
+
+test('a prompt Ian made, typed or through Remote Control, stamps the lease; one delivered by anything else does not', async () => {
+  const { w, fire } = harness()
+  for (const origin of ['composer', 'bridge', 'peer', 'peer-send-message', 'task-notification', 'scheduled-trigger', 'plugin']) await fire.prompt(origin, undefined, origin)
+  await fire.prompt('typed over a turn', 't7')
+  expect(w.sent).toEqual([{ sid: 's1', ev: { event: 'prompt', cwd: CWD } }, { sid: 's1', ev: { event: 'prompt', cwd: CWD } }, { sid: 's1', ev: { event: 'prompt', cwd: CWD } }])
 })
 
 test('a /rename records a start, queued ahead of its turn, but not over a running turn', async () => {
@@ -625,7 +632,7 @@ test('a /rename records a start, queued ahead of its turn, but not over a runnin
   w.name = 'PAYMENTS_API'
   await fire.prompt('c', 't7')   // typed over a running turn
   await fire.prompt('d')
-  expect(events(w)).toEqual(['start', 'start', 'turn.start'])
+  expect(events(w)).toEqual(['start', 'start', 'prompt', 'turn.start', 'prompt', 'prompt'])
   expect(w.events).toEqual(['full ADOPTED', 'prompt b', 'full PAYMENTS_API', 'prompt c', 'prompt d'])
 })
 
@@ -638,7 +645,7 @@ test('a start forgets the sub-agents and the calls the record no longer holds', 
   await fire.prompt('b')
   await fire.call('Bash', 't1')
   await fire.step('a1')
-  expect(events(w)).toEqual(['start', 'child.start', 'ask', 'start', 'child.start'])
+  expect(events(w)).toEqual(['start', 'child.start', 'ask', 'start', 'prompt', 'child.start'])
 })
 
 for (const [fail, why] of [['exit', 'board.py exited 1: ValueError: unknown event'], ['slow', 'process.run: still running at 10000 ms']] as const) {
@@ -805,12 +812,12 @@ test("the goals are mirrored at a start, at each prompt, at a main-loop turn's e
   await fire.complete('answer', 'Found it.', 'a1')
   await fire.compact('auto', [row('user', 'go')])
   await fire.complete('answer', 'Done.')
-  expect(w.jobs).toEqual(['board start s1', 'mirror s1', 'mirror s1', 'board turn.start s1', 'board child.start s1', 'board ask s1', 'board answered s1',
+  expect(w.jobs).toEqual(['board start s1', 'mirror s1', 'board prompt s1', 'mirror s1', 'board turn.start s1', 'board child.start s1', 'board ask s1', 'board answered s1',
                           'board child.stop s1', 'board turn.complete s1', 'mirror s1'])
   await fire.end('clear')
   w.sid = 's2'
   await w.tick(50)
-  expect(w.jobs.slice(10)).toEqual(['board end s1', 'board start s2', 'mirror s2'])
+  expect(w.jobs.slice(11)).toEqual(['board end s1', 'board start s2', 'mirror s2'])
 })
 
 // --- the module in the engine ---

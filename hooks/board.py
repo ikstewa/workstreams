@@ -43,14 +43,15 @@ def save_record(rec):
 def new_record(event, reg):
     name = (reg or {}).get("name") or "unnamed"
     repo, branch = repo_branch(event.get("cwd"))
-    kind = "worker" if " work: " in name else ("control" if name == "control" else "active")
+    kind = "worker" if " work: " in name else name if name in SOLO else "active"
     return {"session_id": event["session_id"], "pid": (reg or {}).get("pid"), "name": name,
-            "workstream": name.split(" work: ")[0] if kind != "control" else None, "kind": kind,
+            "workstream": name.split(" work: ")[0] if kind not in SOLO else None, "kind": kind,
             "cwd": event.get("cwd"), "repo": repo, "branch": branch, "permission_mode": event.get("permission_mode"),
             "state": "idle", "waiting_for": None, "waiting_since": None, "last_message": None, "children": [],
             "last_turn_at": None, "record_synced_at": None, "started_at": NOW(), "ended_reason": None}
 
 IDENTITY, ASKS = ("pid", "name", "workstream", "kind"), ("permission", "question")
+SOLO = ("control", "dispatcher")   # the sessions under the board's Control header, bound to no workstream, each a kind named as its session
 
 def identity(sid, cwd=None):
     """(the session's record, every key present, what new_record() makes of it now). Its identity follows the registry file naming
@@ -91,6 +92,7 @@ def event(sid, ev):
         rec["children"] = [c for c in rec["children"] if c["agent_id"] != ev.get("agent_id")]
     elif kind == "end":
         rec.update(state="ended", ended_reason=ev.get("reason"))
+    elif kind == "prompt": rec["prompted_at"] = now   # Ian typed one: the newest, any session's, starts the dispatcher's lease, engaged()
     else: raise ValueError(f"unknown event: {kind!r}")
     save_record(rec)
     if kind == "ask": snooze(rec["workstream"])   # a permission or a question wants Ian: it ends the workstream's snooze for good
@@ -433,7 +435,7 @@ def load_records():
     """Every board record, or the one line naming the first record render() cannot use."""
     records = []
     for rp in sorted(board_dir().glob("*.json")):
-        if rp.name in ("tree-rows.json", "open.json"): continue   # the sidebar's click map and what Ian has seen, not session records
+        if rp.name in ("tree-rows.json", "open.json", "dispatcher.json"): continue   # the sidebar's click map, what Ian has seen and the dispatcher's state, not session records
         try:
             rec = json.loads(rp.read_text())
         except Exception:
@@ -562,7 +564,7 @@ def place(records):
         tok = r["session_id"] if r.get("kind") == "worker" else key
         return tok != sn.get("open") and (tok not in at or (r.get("last_turn_at") or "") > at[tok])
     # The pid check decides live; the listing is read only for a record already live by it.
-    live = [r for r in records if r.get("kind") != "control" and r["state"] != "ended" and alive(r.get("pid"))]
+    live = [r for r in records if r.get("kind") not in SOLO and r["state"] != "ended" and alive(r.get("pid"))]
     def reason(r):
         # A reply is Ian's turn only once no sub-agent of it runs: until then the session waits on that.
         if r["state"] == "waiting" and not (r.get("waiting_for") == "replied" and running(r)): return r.get("waiting_for") or "input"
@@ -639,8 +641,8 @@ def place(records):
         if key not in pins and not block and (since is None or since > STALE_DAYS * 24) and (created_days is None or created_days > STALE_DAYS):
             stale.append(key); continue
         land("Blocked" if block else "Done" if left == "all done" else "Idle", key, note, [dormant()])
-    ctl = [(r, *status("control", r)[:3]) for r in sorted((r for r in records if r.get("kind") == "control" and r["state"] != "ended" and alive(r.get("pid"))), key=lambda r: r["session_id"])]
-    return ctl, placed, stale   # ctl: [(record, wide state, colour, tree label)]
+    ctl = [(r, *status(r["kind"], r)[:3]) for r in sorted((r for r in records if r.get("kind") in SOLO and r["state"] != "ended" and alive(r.get("pid"))), key=lambda r: (r["kind"], r["session_id"]))]
+    return ctl, placed, stale   # ctl: [(record, wide state, colour, tree label)], control's first, then the dispatcher's
 
 nested = lambda wk: wk and wk["nested"]   # the last field of a place() line: a worker drawn under its workstream's row
 
@@ -649,12 +651,13 @@ def render(records, color=False):
     C = (lambda code, s: f"\033[{code}m{s}\033[0m") if color else (lambda code, s: s)
     ctl, placed, stale = place(records)
     nt = notes(); noted = lambda key, first: [f"note: {oneline(nt[key])}"] if first and nt.get(key) else []   # once a key, under its first row
-    kw = max([len(k) for g in placed.values() for _, k, _, _ in g] + [len("control")] * bool(ctl) or [0])
+    kw = max([len(k) for g in placed.values() for _, k, _, _ in g] + [len(r["kind"]) for r, *_ in ctl] or [0])
     sw = max([len(s) for g in placed.values() for *_, ls in g for _, s, *_ in ls] or [0])
     out = ["# Workstream board (local inputs only; run /workstreams:board --deep for GitHub PRs and Jira)"]
     if ctl: out.append(C("1", "Control"))
     for r, state, code, _ in ctl:   # listed so every live session is accounted for; it belongs to no workstream
-        out.append(f"  {C('36', 'control'.ljust(kw))}  {r['session_id'][:8]}  {C(code, state)}")
+        if r["kind"] == "dispatcher" and code not in ("31", "33"): state = lease(records, wide=True)   # an ask or an unread reply says itself, as control's
+        out.append(f"  {C('36', r['kind'].ljust(kw))}  {r['session_id'][:8]}  {C(code, state)}")
     for g in GROUPS:
         if not placed[g]: continue
         out.append(C("1", g))
@@ -678,7 +681,7 @@ def pane_width(width=None):
 
 def tree(records, color=False, width=None, hits=None, current=None, height=None):
     """The same board as render(), narrow: a file-tree sidebar for a tmux pane. Width is read per call, so a resize lands on the next redraw.
-    `hits` gathers line number -> {key, session_id, glyph} for every clickable row: control, sessions, and idle, blocked and done workstreams,
+    `hits` gathers line number -> {key, session_id, glyph} for every clickable row: control and the dispatcher, sessions, and idle, blocked and done workstreams,
     and a worker's own row under its workstream's, which adds worker, its name,
     and line number -> {key, goal} for each row of a goal in the open workstream's panel and {key, pin, snooze_x} for its key row; nothing else.
     A row whose glyph is ↻ adds reset_x, the glyph's column. `current` is open_key(), resolved by the caller: its rows carry the bar,
@@ -700,9 +703,11 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
     def noted(key, trunk):   # Ian's note, dim, on the row's trunk; display only, so never in `hits`
         lead = f"  {trunk} ✎ "; return [C("2", lead + oneline(nt[key], W - len(lead)))] if nt.get(key) else []
     out = [C("1", "WORKSTREAMS"), C("1", "▾ Control")]
-    for r, _, code, st in ctl or [(None, None, "2", "click to open")]:   # always a row: with no live control, a click dispatches one
-        hits[len(out)] = {"key": "control", "session_id": r and r["session_id"], "glyph": "◆"} | need(code)
-        out.append(row("  ", "◆", "control", st, tone(code), "36", cap=W - 12, on=current == "control"))   # 12: lead, glyph, "control", gap
+    for kind, glyph in (("control", "◆"), ("dispatcher", "◇")):
+        for r, _, code, st in [c for c in ctl if c[0]["kind"] == kind] or [(None, None, "2", "click to open")]:   # always a row: with none live, a click dispatches one
+            if r and kind == "dispatcher" and code not in ("31", "33"): st = lease(records)
+            hits[len(out)] = {"key": kind, "session_id": r and r["session_id"], "glyph": glyph} | need(code)
+            out.append(row("  ", glyph, kind, st, tone(code), "36", cap=W - 5 - len(kind), on=current == kind))   # 5: lead, glyph, the gaps
     for g in GROUPS:
         if not placed[g]: continue
         out.append(C("1", f"▾ {g}"))
@@ -794,13 +799,14 @@ RESUME = ("Start by restating this workstream from your injected charter: its pu
           "Then read the handoff and tell me where things stand and what needs deciding.")
 
 CONTROL = ["--model", "opus", "--effort", "high", "--permission-mode", "auto", "/workstreams:board"]   # control's own flags, never the user's defaults
+DISPATCHER = ["--model", "sonnet", "--permission-mode", "auto", "/workstreams:dispatch"]
 
 def decide(entry, reg, rec=None, x=None, rows=dict):
     """What a click on a tree row does, given its tree-rows.json entry, its live session's registry (None if not live), its board record,
     the click's column (None opens) and a reader of the agents listing, called only for a session that is not live.
     ("attach", job) | ("restart", job) | ("dispatch", key) | ("message", text) | None for an unmapped line."""
     if not entry: return None
-    control, sid = entry["key"] == "control", entry.get("session_id")
+    control, sid = entry["key"] in SOLO, entry.get("session_id")   # the dispatcher's row clicks as control's
     live = bool(sid and reg and reg.get("sessionId") == sid)   # a reused pid names another session
     reset = x is not None and "reset_x" in entry and entry["reset_x"] <= x <= entry["reset_x"] + 1   # the ↻ and the space after it
     if not sid or (control or reset) and not live: return ("dispatch", entry["key"])   # control holds no state: an ended one is simply replaced
@@ -879,7 +885,7 @@ def perform(entry, act, target):
             if time.time() - lock.stat().st_mtime < DISPATCH_HOLD: return tmux("display-message", f"{entry['key']}: already starting")
         if act[0] == "restart":
             subprocess.run(["claude", "stop", act[1]], capture_output=True, timeout=60); act = ("dispatch", entry["key"])
-        args = CONTROL if act[1] == "control" else ["--permission-mode", "auto", RESUME]
+        args = {"control": CONTROL, "dispatcher": DISPATCHER}.get(act[1], ["--permission-mode", "auto", RESUME])
         wid, why = launch(act[1], args, 120)
         act = ("attach", wid) if wid else ("message", f"{act[1]}: {why or 'dispatch printed nothing'}")
         lock.touch() if wid else lock.unlink(missing_ok=True)   # the hold runs from the dispatch's end; a failed one frees the key for a retry
@@ -995,7 +1001,135 @@ def snooze_menu(key, client=None):
     items = [a for i, (name, arg) in enumerate((("1h", "1h"), ("3h", "3h"), ("1d", morning))) for a in (name, str(i + 1), run(arg))]
     subprocess.run(["tmux", "display-menu", "-M", *(["-c", client] if client else []), "-T", f"snooze {key}".replace("#", "##"), *items], capture_output=True)
 
+ENGAGED_MINUTES = 20   # the dispatcher acts only while Ian's newest typed prompt, in any session, is younger than this
+IDLE_MINUTES = 5   # a manager or worker settled this long is one the dispatcher may nudge onto its next step
+WINDOW, BANDS = 1_000_000, (50, 70, 85)   # a session's context window, and the percentages of it whose crossing the watch says
+POLL, PR_POLL = 10, 20   # seconds between looks at the sessions, and at the PRs
+REF = re.compile(r"(?:github\.com/)?([\w.-]+)/([\w.-]+)(?:/pull/|#)(\d+)")   # a PR's URL, or owner/repo#n
+
+def engaged(records):
+    """(whether Ian is engaged, seconds since his newest typed prompt in any session, or None for none): the dispatcher's lease."""
+    s = seconds_since(max((r["prompted_at"] for r in records if r.get("prompted_at")), default=None))
+    return s is not None and s < ENGAGED_MINUTES * 60, s
+
+def dstate(change=None):
+    """board/dispatcher.json: {snapshot: the watch's last look, prs: refs Ian named to watch, needs: the dispatcher's Needs-Ian list}.
+    `change` maps it to the keys to write over it, under the lock: the watch and the dispatcher's commands each write their own."""
+    p = board_dir() / "dispatcher.json"
+    with locked(p):
+        try: d = json.loads(p.read_text())
+        except (OSError, ValueError): d = {}
+        if change: d |= change(d); atomic_write(p, json.dumps(d))
+    return d
+
+def lease(records, wide=False):
+    """The dispatcher row's state: watching, with the count its session last wrote, while Ian is engaged; else paused, since when."""
+    on, s = engaged(records); d = dstate(); n = len(d.get("needs") or []); snap = d.get("snapshot") or {}
+    if not wide: return "watching" + f" · {n} need you" * bool(n) if on else f"paused · away {ago(s)}" if s is not None else "paused"
+    if on: return (f"watching {len(snap.get('sessions') or {})} sessions, {len(snap.get('prs') or {})} PRs" + f" · {n} need Ian" * bool(n)
+                   + f" · engaged {remaining(ENGAGED_MINUTES * 60 - s)} more")
+    at = f" {time.strftime('%H:%M', time.localtime(time.time() - s + ENGAGED_MINUTES * 60))}, no prompt from Ian for {ago(s)}" if s is not None else ", no prompt from Ian yet"
+    return f"paused{at} · watches stopped"
+
+pinned = lambda: {k: fm for k, (fm, _) in charters(skip=()).items() if scalar(fm, "pinned") == "true"}
+
+def context(sid):
+    """Tokens in a session's context at its last main-thread reply, read from its transcript's last megabyte, or None."""
+    fs = list((Path.home() / ".claude" / "projects").glob(f"*/{sid}.jsonl"))
+    if not fs: return None
+    with fs[0].open("rb") as f:
+        f.seek(max(0, f.seek(0, 2) - 1_000_000)); lines = f.read().decode("utf-8", "replace").splitlines()
+    for line in reversed(lines):
+        try: r = json.loads(line)
+        except ValueError: continue
+        u = isinstance(r, dict) and isinstance(r.get("message"), dict) and r["message"].get("usage")
+        if u and r.get("type") == "assistant" and not r.get("isSidechain"):
+            return u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+
+def sessions(records):
+    """{id8: what the watch compares} for each live manager and worker of a pinned workstream."""
+    out, pins = {}, pinned()
+    for r in records:
+        if r.get("kind") not in ("active", "worker") or r.get("workstream") not in pins or r["state"] == "ended" or not alive(r.get("pid")): continue
+        ctx = context(r["session_id"])
+        out[r["session_id"][:8]] = {"ws": r["workstream"], "kind": r["kind"], "name": r["name"], "ctx": ctx, "band": max([b for b in BANDS if 100 * (ctx or 0) >= b * WINDOW], default=0),
+                                    "state": r["state"], "why": r["waiting_for"], "turn": r.get("last_turn_at"), "msg": oneline(r.get("last_message") or "", 180),
+                                    "idle": not working(r) and r["waiting_for"] in (None, "replied"), "kids": {str(c.get("agent_id"))[:8]: c.get("name") for c in r.get("children") or []}}
+    return out
+
+who = lambda s, sid: f"{s['ws']} " + ("manager" if s["kind"] == "active" else f"worker '{s['name'].partition(' work: ')[2]}'") + f" {sid}"
+
+def changes(old, new):
+    """Lines for what changed between two looks at the sessions. Each session in `new` carries what it was last said to wait on and the turn
+    whose idle stretch was last said, so a run of prompts in one turn, or one stretch, is said once: a stretch ends when the session next works."""
+    for sid, s in new.items():
+        if (o := old.get(sid)) is None: yield f"NEW {who(s, sid)} · {s['state']}"; continue
+        s["said"], s["idled"] = o.get("said"), o.get("idled")
+        if s["state"] == "waiting" and [s["turn"], s["why"]] != s["said"]:
+            s["said"] = [s["turn"], s["why"]]; yield f"{who(s, sid)} → waiting·{s['why']}: {s['msg']}"
+        if s["idle"] and s["turn"] != s["idled"] and (m := int((seconds_since(s["turn"]) or 0) // 60)) >= IDLE_MINUTES:
+            s["idled"] = s["turn"]; yield f"IDLE {who(s, sid)} {m}m: {s['msg']}"
+        if s["band"] > o.get("band", 0): yield f"CONTEXT {who(s, sid)} at {round(100 * s['ctx'] / WINDOW)}% ({s['ctx'] // 1000}k of {WINDOW // 1000}k)"
+        yield from (f"{who(s, sid)} sub-agent {name} {k} finished" for k, name in o.get("kids", {}).items() if k not in s["kids"])   # the record drops a finished one
+    yield from (f"GONE {who(o, sid)} (ended or unpinned)" for sid, o in old.items() if sid not in new)
+
+def refs():
+    """owner/repo#n for each PR a pinned charter's blocked: line names, and each Ian named to the dispatcher."""
+    return sorted({f"{o}/{r}#{n}" for o, r, n in REF.findall(" ".join([scalar(fm, "blocked") or "" for fm in pinned().values()] + (dstate().get("prs") or [])))})
+
+def pulls(want):
+    """{ref: [state, head7, reviewDecision, mergeStateStatus]} for `want`, from one `gh api graphql` query; a ref it cannot read is left out."""
+    import subprocess
+    if not want: return {}
+    q = "query{" + " ".join(f'p{i}: repository(owner: "{o}", name: "{r}") {{ pullRequest(number: {n}) {{ state headRefOid reviewDecision mergeStateStatus }} }}'
+                            for i, (o, r, n) in enumerate(REF.fullmatch(ref).groups() for ref in want)) + "}"
+    try: data = json.loads(subprocess.run(["gh", "api", "graphql", "-f", f"query={q}"], capture_output=True, text=True, timeout=30).stdout).get("data") or {}
+    except Exception: return {}   # gh missing, offline or slow: no change this look
+    return {ref: [p["state"], p["headRefOid"][:7], p.get("reviewDecision") or "", p.get("mergeStateStatus") or ""]
+            for i, ref in enumerate(want) if (p := (data.get(f"p{i}") or {}).get("pullRequest"))}
+
+def pr_changes(old, new, after):
+    """Lines for what changed between two looks at the PRs. `after`, {ref: the sibling that merged}, is carried between looks and changed here:
+    a merge marks each open PR of its repo, and the next look says a marked PR's DIRTY or BEHIND as caused by it, changed or not."""
+    said = set()
+    for ref, m in list(after.items()):
+        if ref not in new: continue
+        if (ms := new[ref][3]) in ("DIRTY", "BEHIND"): said.add(ref); yield f"PR {ref} {ms} after {m} merged"
+        if ms != "UNKNOWN": del after[ref]   # GitHub answers UNKNOWN until it has recomputed against the new base
+    for ref, (st, head, rd, ms) in new.items():
+        if (o := old.get(ref)) is None: continue
+        if st != o[0]:
+            yield f"PR {ref} → {st}"
+            if st == "MERGED": after |= {r: ref for r, v in new.items() if r != ref and r.split("#")[0] == ref.split("#")[0] and v[0] == "OPEN"}
+        elif head != o[1]: yield f"PR {ref} new head {head}"
+        elif rd != o[2]: yield f"PR {ref} review → {rd or 'none'}"
+        if ms != o[3] and ref not in said and ms in ("DIRTY", "BEHIND", "BLOCKED", "UNSTABLE", "CLEAN"): yield f"PR {ref} merge state → {ms}"
+
+def watch():
+    """`board.py watch`, run by the dispatcher under its Monitor tool: one line per change in a pinned workstream's live sessions and the PRs
+    its work waits on, until Ian has typed no prompt for ENGAGED_MINUTES. A re-armed watch first says what changed since the saved look."""
+    import itertools
+    say = lambda line: print(line, flush=True)
+    last = dstate().get("snapshot"); old = last or {"sessions": {}, "prs": {}, "after": {}}
+    for tick in itertools.count():
+        if not isinstance(records := load_records(), str):
+            on, s = engaged(records)
+            if not on: return say("PAUSED: no prompt from Ian " + (f"since {time.strftime('%H:%M', time.localtime(time.time() - s))}" if s is not None else "yet"))
+            new = {"sessions": sessions(records), "prs": old["prs"], "after": dict(old["after"])}
+            lines = list(changes(old["sessions"], new["sessions"]))
+            if tick % (PR_POLL // POLL) == 0:
+                want = refs(); got = pulls(want)
+                lines += pr_changes(old["prs"], got, new["after"]); new["prs"] = {r: v for r, v in (old["prs"] | got).items() if r in want}
+            if tick == 0: lines = lines * (last is not None) + [f"armed: {len(new['sessions'])} live sessions across pinned workstreams, {len(new['prs'])} PRs"]
+            for line in lines: say(line)
+            if new != old: dstate(lambda d: {"snapshot": new})
+            old = new
+        time.sleep(POLL)
+
 def main():
+    if sys.argv[1:2] == ["watch"]: watch(); return
+    if sys.argv[1:2] == ["needs"]: dstate(lambda d: {"needs": json.load(sys.stdin)}); return
+    if sys.argv[1:2] == ["pr"]: dstate(lambda d: {"prs": sorted(set(d.get("prs") or []) | set(sys.argv[2:]))}); return
     if sys.argv[1:2] == ["charter"]: print(json.dumps(charter(sys.argv[2], "--refresh" in sys.argv[3:]))); return
     if sys.argv[1:2] == ["event"]: event(sys.argv[2], json.load(sys.stdin)); return
     if sys.argv[1:2] == ["write"]: print(json.dumps(write(sys.argv[2], json.load(sys.stdin)))); return

@@ -8,13 +8,14 @@ A Claude Code plugin for people who run several sessions at once. It groups sess
 - **Binding.** A session belongs to the workstream whose `workstream:` key equals the session's name. A session named `control` is the control session. A name of the form `KEY work: <task>` is a worker of `KEY`: it reads a short brief instead of the charter, and the sidebar draws it under its workstream's row.
 - **The mod.** In a bound session it appends the charter and the newest part of the record as a conversation row at start, after `/clear` and after a compaction. Rows over the record budget roll to `<KEY>/record-archive.md` beside the charter, and done goals are left out of what a session reads. It records board state from turn, ask, answer and sub-agent events. It registers the `mcp__workstreams__charter` tool, the session's only way to write its charter (focus, record entries, goals, block), and the `mcp__workstreams__worker` tool, which starts a worker (`claude --bg`, named `KEY work: <task>`, from the project root) for work in a repo or worktree of its own, and closes one of the session's workers by id once it has reported: `claude stop` then `claude rm`, which deletes its session and worktree, and, when it keeps the worktree, removes it only if the worker's changes are committed and its commits are on the default branch or its branch has a merged PR. It then deletes the worker's local branch. It keeps the charter's goals in step with the session's task list: completing a goal's task ticks the goal.
 - **The board.** `board.py render` prints every workstream grouped as Control, Pinned, Active, Blocked, Idle, Unassigned, Done and Snoozed, with a stale line for workstreams that have had no session for a while. `bin/ws` runs it in a tmux sidebar; the `/workstreams:board` skill prints it in a session and ranks what to do next.
+- **The dispatcher.** A session named `dispatcher`, started from its row under Control, keeps the managers and workers of pinned workstreams busy while you are engaged: for 20 minutes after your last prompt in any session. Its `/workstreams:dispatch` skill runs `board.py watch`, which reports finished turns, waits, idle sessions and changes to the PRs that pinned charters' `blocked:` lines name, all PRs read in one `gh` query. It nudges an idle session onto a step its charter or its last message already settled, tells a manager to merge master when a sibling PR's merge leaves its PR behind, and keeps one list of what needs you. Decisions, merges and pushes stay yours.
 
 ## Requirements
 
 - Claude Code with the mods API (`$.tool.register` and the session, turn and tool events). It is developed against 2.1.289 to 2.1.291.
 - `tmux`, for the sidebar.
 - `uv`, which runs `board.py` with its own Python (`uv run --no-project`). The script uses only the standard library.
-- `gh`, only for `/workstreams:board --deep`, which also reads Jira through an MCP server when one is configured.
+- `gh`, only for `/workstreams:board --deep`, which also reads Jira through an MCP server when one is configured, and for the dispatcher's watch of PRs.
 
 ## Install
 

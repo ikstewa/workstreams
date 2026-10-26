@@ -576,7 +576,7 @@ class BoardTest(unittest.TestCase):
         (self.board / "open.json").write_text(json.dumps({"seen": {"READ": self.ago(0)}}))
         wide, hits = self.render("--no-color"), self.hits()
         self.assertEqual({k: self.group_of(wide, k) for k in cases}, {k: v[1] for k, v in cases.items()})
-        self.assertEqual({h["key"]: (h["glyph"], h.get("need")) for h in hits.values() if h["key"] != "control"}, {k: v[2:] for k, v in cases.items()})
+        self.assertEqual({h["key"]: (h["glyph"], h.get("need")) for h in hits.values() if h["key"] not in ("control", "dispatcher")}, {k: v[2:] for k, v in cases.items()})
         lines = self.tree(40).splitlines()
         self.assertEqual([l for l in lines if l.startswith("▾")], ["▾ Control", "▾ Active", "▾ Done"])
         for k in cases: self.assertRegex(next(l for l in lines if f" {k} " in l), r"done$")
@@ -694,10 +694,10 @@ class BoardTest(unittest.TestCase):
         sub = lambda n, st="done": {"agent_id": n, "name": n, "state": st}
         self.put("a1", "A", me, children=[sub("one"), sub("two")])
         self.put("b1", "B", me, children=[sub("three", "paused")])   # not running, so B reads idle
-        self.assertEqual([l.rstrip() for l in self.tree().splitlines()[3:8]],
+        self.assertEqual([l.rstrip() for l in self.tree().splitlines()[4:9]],
                          ["▾ Active", "  ○ A" + " " * 24 + "no turn", "  │ ├ one" + " " * 23 + "done",
                           "  │ └ two" + " " * 23 + "done", "  ○ B" + " " * 24 + "no turn"])
-        self.assertRegex(self.tree().splitlines()[8], r"^    └ three +paused$")   # last session: no trunk
+        self.assertRegex(self.tree().splitlines()[9], r"^    └ three +paused$")   # last session: no trunk
 
     def test_tree_lines_fit_the_width(self):
         self.board_of_every_kind()
@@ -757,9 +757,9 @@ class BoardTest(unittest.TestCase):
             hits = json.loads(rows.read_text())
         finally: p.kill(); p.wait()
         lines = self.tree().splitlines()   # the watch prints these same lines from the top of the pane, line 0 first
-        self.assertEqual(sorted(map(int, hits)), [i for i, l in enumerate(lines) if l.startswith("  ") and l[2] in "◆●▶○◌"])
+        self.assertEqual(sorted(map(int, hits)), [i for i, l in enumerate(lines) if l.startswith("  ") and l[2] in "◆◇●▶○◌"])
         by_key = {h["key"]: h["session_id"] for h in hits.values()}
-        self.assertEqual(by_key, {"control": "c-live", "WAIT": "s-wait", "A_VERY_LONG_WORKSTREAM_KEY_INDEED": "s-long", "BUSY": "s-busy",
+        self.assertEqual(by_key, {"control": "c-live", "dispatcher": None, "WAIT": "s-wait", "A_VERY_LONG_WORKSTREAM_KEY_INDEED": "s-long", "BUSY": "s-busy",
                                   "IDLE": "s-idle", "DORM": None, "8ab3": "s-guess-full-session-id", "loose": "s-loose"})
         self.assertEqual(self.group_of(self.render("--no-color"), "WAIT"), "Active")   # the map file is not read as a session record
 
@@ -913,7 +913,8 @@ class BoardTest(unittest.TestCase):
         from unittest import mock
         with mock.patch.dict(os.environ, self.env):   # in-process: the fake HOME and the fake claude
             mod = self.module(); mod.tree(mod.load_records(), width=36, hits=hits)
-        self.assertEqual(hits, {2: {"key": "control", "session_id": None, "glyph": "◆"}, 4: {"key": "IDLE", "session_id": "s-idle", "glyph": "○"}})
+        self.assertEqual(hits, {2: {"key": "control", "session_id": None, "glyph": "◆"}, 3: {"key": "dispatcher", "session_id": None, "glyph": "◇"},
+                                5: {"key": "IDLE", "session_id": "s-idle", "glyph": "○"}})
         self.assertNotIn("control", self.render("--no-color"))   # the wide board lists only a live control
 
     def test_decide_control(self):
@@ -1226,7 +1227,7 @@ class BoardTest(unittest.TestCase):
     RETIRED = json.dumps([{"sessionId": "s-ret-full", "kind": "background", "state": "done"}])
 
     def switchable(self):
-        """The sidebar, top to bottom: control with none live, ALPHA live in the background, BRAVO live in another terminal,
+        """The sidebar, top to bottom: control and the dispatcher with none live, ALPHA live in the background, BRAVO live in another terminal,
         CHARLIE live in the background, DORM with nothing to reopen, RET with a retired session to revive. Returns {key: line}."""
         for k in ("ALPHA", "BRAVO", "CHARLIE", "DORM", "RET"): self.write_charter(k)
         # Three live sessions need three pids that exist: this process, its parent, and pid 1, another user's, which alive() counts.
@@ -1274,7 +1275,7 @@ class BoardTest(unittest.TestCase):
         self.write_charter("ALPHA"); self.write_charter("DORM")
         self.live("c-full-id", "control", os.getppid(), kind="control", workstream=None, last_turn_at=self.ago(2))
         self.live("s-alpha-full", "ALPHA", os.getpid()); self.put("s-dorm-full", "DORM", None, last_turn_at=self.ago(2))
-        self.assertEqual([h["key"] for _, h in sorted(self.hits().items())], ["control", "ALPHA", "DORM"])
+        self.assertEqual([h["key"] for _, h in sorted(self.hits().items())], ["control", "dispatcher", "ALPHA", "DORM"])
         self.open_now("ALPHA")
         for way in ("next", "prev"):
             self.assertEqual(self.press("go", way, "%9", title="ALPHA"), ["display-message|workstreams: no other session to open|"], way)
@@ -1296,14 +1297,14 @@ class BoardTest(unittest.TestCase):
     def test_the_menu_lists_every_row_and_an_item_is_its_click(self):
         lines = self.switchable(); self.open_now("CHARLIE")
         (call,) = self.press("menu", "/dev/ttys042", "%9", title="CHARLIE")   # one call, and nothing opened by it
-        flags, items = self.menu_items(call, 6)
-        self.assertEqual(flags, ["-M", "-c", "/dev/ttys042", "-C", "3"])   # CHARLIE's item is the starting choice
-        self.assertEqual([(n, k) for n, k, _ in items], [("◆ control", "1"), ("○ ALPHA", "2"), ("○ BRAVO", "3"), ("○ CHARLIE", "4"), ("◌ DORM", "5"), ("↻ RET", "6")])
+        flags, items = self.menu_items(call, 7)
+        self.assertEqual(flags, ["-M", "-c", "/dev/ttys042", "-C", "4"])   # CHARLIE's item is the starting choice
+        self.assertEqual([(n, k) for n, k, _ in items], [("◆ control", "1"), ("◇ dispatcher", "2"), ("○ ALPHA", "3"), ("○ BRAVO", "4"), ("○ CHARLIE", "5"), ("◌ DORM", "6"), ("↻ RET", "7")])
         for (_, _, cmd), line in zip(items, sorted(lines.values())):   # the sidebar's plain click on that line: no column, so never a reset
             *run, inner = shlex.split(cmd)
             self.assertEqual((run, shlex.split(inner)), (["run-shell", "-b", "-c", os.getcwd()], [sys.executable, str(HOOK), "open", str(line), "%9"]))
         self.open_now(None)
-        self.assertEqual(self.menu_items(self.press("menu", "/dev/ttys042", "%9")[0], 6)[0], ["-M", "-c", "/dev/ttys042"])   # nothing open: no choice set
+        self.assertEqual(self.menu_items(self.press("menu", "/dev/ttys042", "%9")[0], 7)[0], ["-M", "-c", "/dev/ttys042"])   # nothing open: no choice set
 
     def test_menu_shortcuts_skip_q_and_run_out(self):
         self.board.mkdir(parents=True, exist_ok=True)
@@ -1353,9 +1354,9 @@ class BoardTest(unittest.TestCase):
         self.needy(); hits = self.hits()
         # The line map carries need on a red or a yellow row only, beside the keys every row has.
         self.assertEqual({h["key"]: h.get("need") for h in hits.values()},
-                         {"control": "unread", "ALF": "asks", "BOB": "unread", "IDLE": None, "MID": "asks", "READ": None, "YAK": "unread", "ZED": "asks"})
+                         {"control": "unread", "dispatcher": None, "ALF": "asks", "BOB": "unread", "IDLE": None, "MID": "asks", "READ": None, "YAK": "unread", "ZED": "asks"})
         self.assertEqual(next(h for h in hits.values() if h["key"] == "ZED"), {"key": "ZED", "session_id": "s-zed-full", "glyph": "●", "need": "asks"})
-        self.assertEqual([hits[n]["key"] for n in sorted(hits, key=int)], ["control", "ALF", "BOB", "IDLE", "MID", "READ", "YAK", "ZED"])
+        self.assertEqual([hits[n]["key"] for n in sorted(hits, key=int)], ["control", "dispatcher", "ALF", "BOB", "IDLE", "MID", "READ", "YAK", "ZED"])
         # From nothing open, each press opens the next row down that needs Ian, an ask or a reply alike, and wraps; READ and IDLE never come up.
         here, claude = "agent view", Path(self.home) / "claude.log"
         for key in ("control", "ALF", "BOB", "MID", "YAK", "ZED", "control"):
@@ -1377,7 +1378,7 @@ class BoardTest(unittest.TestCase):
         self.live("s-term-full", "TERM", self.pid(), "interactive", state="waiting", waiting_for="question", waiting_since=self.ago(2))
         self.live("s-ctl-full", "control", self.pid(), kind="control", workstream=None, state="waiting", waiting_for="replied", last_turn_at=self.ago(2))
         (self.board / "open.json").write_text(json.dumps({"open": "OPEN", "seen": {"READ": self.ago(0)}}))
-        self.assertEqual({h["key"]: h.get("need") for h in self.hits().values()}, {"control": "unread", "IDLE": None, "OPEN": "asks", "READ": None, "TERM": "asks", "WORK": None})
+        self.assertEqual({h["key"]: h.get("need") for h in self.hits().values()}, {"control": "unread", "dispatcher": None, "IDLE": None, "OPEN": "asks", "READ": None, "TERM": "asks", "WORK": None})
         self.assertEqual(self.press("go", "need", "%9", title="OPEN"), ["display-message|workstreams: nothing needs you|"])
         self.assertFalse((Path(self.home) / "claude.log").exists())   # nothing stopped, dispatched or listed
 
@@ -1440,7 +1441,7 @@ class BoardTest(unittest.TestCase):
         wide, hits = self.render("--no-color"), self.hits()
         self.assertEqual({k: self.group_of(wide, k) for k in keys}, {"REPLY": "Blocked", "READ": "Blocked", "IDLE": "Blocked", "PERM": "Active",
                                                                      "ASK": "Active", "LISTED": "Active", "WORK": "Active", "KID": "Active"})
-        self.assertEqual({h["key"]: (h["glyph"], h.get("need")) for h in hits.values() if h["key"] != "control"},
+        self.assertEqual({h["key"]: (h["glyph"], h.get("need")) for h in hits.values() if h["key"] not in ("control", "dispatcher")},
                          {"REPLY": ("⏸", None), "READ": ("⏸", None), "IDLE": ("⏸", None), "PERM": ("●", "asks"), "ASK": ("●", "asks"),
                           "LISTED": ("●", "asks"), "WORK": ("▶", None), "KID": ("▶", None)})
         self.assertRegex(wide, r"(?m)^  REPLY +s-reply- +PR #12 +PROJ-1")   # its session's id, and the block for its state
@@ -1459,7 +1460,7 @@ class BoardTest(unittest.TestCase):
     def test_option_n_with_only_blocked_rows_starts_nothing(self):
         self.blocked("REPLY"); self.live("s-reply-full", "REPLY", self.pid(), state="waiting", waiting_for="replied", last_turn_at=self.ago(0.5))
         self.blocked("DORM", created=time.strftime("%Y-%m-%d", time.gmtime()))   # nothing live
-        self.assertEqual({h["key"]: h.get("need") for h in self.hits().values()}, {"control": None, "DORM": None, "REPLY": None})
+        self.assertEqual({h["key"]: h.get("need") for h in self.hits().values()}, {"control": None, "dispatcher": None, "DORM": None, "REPLY": None})
         self.assertEqual(self.press("go", "need", "%9"), ["display-message|workstreams: nothing needs you|"])
         self.assertFalse((Path(self.home) / "claude.log").exists())
 
@@ -1607,7 +1608,7 @@ class BoardTest(unittest.TestCase):
         lines = self.tree(40).splitlines(); self.assertEqual(lines, want)
         hits = self.hits()   # the click map still names the row drawn on each of its lines
         self.assertEqual({n: lines[n].split()[1] for n in hits}, {n: h["key"] for n, h in hits.items()})
-        self.assertEqual(len(hits), 5)
+        self.assertEqual(len(hits), 6)
 
     def test_a_note_line_fits_the_width(self):
         me = self.me(); self.write_charter("LONG"); self.write_charter("SHORT"); self.put("s-long", "LONG", me); self.put("s-short", "SHORT", me)
@@ -1794,12 +1795,12 @@ class BoardTest(unittest.TestCase):
 
     def test_the_panel_stops_a_row_short_of_the_pane(self):
         # The watch's trailing newline would scroll a full pane; a cut never ends on a blank row, and keeps a goal's indent.
-        # Five rows down to the stale line, so a pane of `height` leaves height - 6 for the panel; at 13 the cut lands on a blank.
-        for height, n, last in ((16, 10, "  row and then a third, which it never …"), (14, 8, "☐ Short goal …"), (13, 6, "index it replaces. …"),
-                                (11, 5, "Ship the board, then retire the memory …")):
+        # Six rows down to the stale line, so a pane of `height` leaves height - 7 for the panel; at 14 the cut lands on a blank.
+        for height, n, last in ((17, 10, "  row and then a third, which it never …"), (15, 8, "☐ Short goal …"), (14, 6, "index it replaces. …"),
+                                (12, 5, "Ship the board, then retire the memory …")):
             rows = self.panel(height=height)
             self.assertEqual((len(rows), rows[-1]), (n, last), height)
-        self.assertEqual(self.panel(height=10), [])   # room for the key, not for a row under it
+        self.assertEqual(self.panel(height=11), [])   # room for the key, not for a row under it
 
     def test_no_panel_without_an_open_charter(self):
         # The agent view, control and an unassigned session open nothing to describe.
@@ -1827,7 +1828,7 @@ class BoardTest(unittest.TestCase):
         from unittest import mock
         with mock.patch.dict(os.environ, self.env):   # a step and the menu see the rows alone
             mod = self.module(); self.assertEqual(sorted(map(int, mod.tree_rows())), sorted(n for n, e in hits.items() if "goal" not in e and "pin" not in e))
-        lines, hits = self.goal_map(height=18)   # cut on the long goal's second row, which still sends it
+        lines, hits = self.goal_map(height=19)   # cut on the long goal's second row, which still sends it
         self.assertEqual((lines[-1], hits[len(lines) - 1]["goal"]), ("  row and then a third, which it never …", self.LONG))
 
     def click_goal(self, goal, title="OPEN"):
@@ -1968,7 +1969,7 @@ class BoardTest(unittest.TestCase):
         self.write_charter("NAP", extra=f"snoozed_until: {self.ahead(3)}\n")
         self.live("s-nap-full", "NAP", self.pid(), state="waiting", waiting_for="replied", waiting_since=self.ago(5), last_turn_at=self.ago(5))
         self.write_charter("NEWS"); self.live("s-news-full", "NEWS", self.pid(), state="waiting", waiting_for="replied", waiting_since=self.ago(3), last_turn_at=self.ago(3))
-        self.assertEqual({h["key"]: h.get("need") for h in self.hits().values()}, {"control": None, "NAP": None, "NEWS": "unread"})
+        self.assertEqual({h["key"]: h.get("need") for h in self.hits().values()}, {"control": None, "dispatcher": None, "NAP": None, "NEWS": "unread"})
         self.assertEqual(self.press("go", "need", "%9"), self.attached("NEWS", "s-news-f"))
         self.assertEqual(self.press("go", "need", "%9", title="NEWS"), ["display-message|workstreams: nothing needs you|"])
 
@@ -2614,8 +2615,8 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(self.press("go", "next", "%9", title=worker), attach("CHARLIE", "s-charli"))   # on from the worker, not back to the top
         self.assertEqual(self.press("go", "prev", "%9", title="CHARLIE"), attach(worker, "w-alpha-"))
         (call,) = self.press("menu", "/dev/ttys042", "%9", title=worker)
-        flags, items = self.menu_items(call, 4)
-        self.assertEqual(([n for n, *_ in items], flags[-2:]), (["◆ control", "○ ALPHA", f"○ {worker}", "○ CHARLIE"], ["-C", "2"]))   # the choice starts on the open worker
+        flags, items = self.menu_items(call, 5)
+        self.assertEqual(([n for n, *_ in items], flags[-2:]), (["◆ control", "◇ dispatcher", "○ ALPHA", f"○ {worker}", "○ CHARLIE"], ["-C", "3"]))   # the choice starts on the open worker
 
     def test_a_worker_nests_under_the_first_head_after_its_sub_agents(self):
         # A key with no charter but an active session still nests its worker; of two heads it takes the first; its branch follows the sub-agents'.
@@ -2641,6 +2642,117 @@ class BoardTest(unittest.TestCase):
         (self.board / "open.json").write_text(json.dumps({"open": "w-lone", "title": "LONE work: x", "seen": {}}))
         self.panes("%1\t", "%2\tLONE work: x")
         (row,) = [l for l in self.tree(40).splitlines() if "▌" in l]; self.assertTrue(row.startswith("▌ ○ LONE"), row)
+
+    # --- the dispatcher: its record, its lease, its row and its watch ---
+
+    def at(self, minutes):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - minutes * 60))
+
+    def mod_env(self):
+        from unittest import mock
+        p = mock.patch.dict(os.environ, self.env); p.start(); self.addCleanup(p.stop); return self.module()
+
+    def test_a_typed_prompt_stamps_its_record_and_a_start_keeps_it(self):
+        self.event("start"); self.event("prompt"); stamp = self.rec()["prompted_at"]
+        self.assertIsNotNone(stamp); self.event("start"); self.assertEqual(self.rec()["prompted_at"], stamp)
+        (Path(self.home) / ".claude" / "sessions" / "4242.json").write_text(json.dumps({"pid": 4242, "sessionId": "s1", "name": "dispatcher"}))
+        self.event("start"); self.assertEqual((self.rec()["kind"], self.rec()["workstream"]), ("dispatcher", None))
+
+    def test_engaged_is_the_newest_prompt_of_any_session_under_twenty_minutes(self):
+        engaged = self.mod_env().engaged
+        self.assertTrue(engaged([{"prompted_at": self.at(120)}, {"prompted_at": self.at(19.9)}, {}])[0])
+        on, s = engaged([{"prompted_at": self.at(20.1)}, {"prompted_at": self.at(90)}])
+        self.assertFalse(on); self.assertAlmostEqual(s, 20.1 * 60, delta=2)
+        self.assertEqual(engaged([{}]), (False, None))
+
+    def needs(self, items):
+        p = subprocess.run([sys.executable, str(HOOK), "needs"], input=json.dumps(items), capture_output=True, text=True, env=self.env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_the_dispatcher_row_reads_watching_paused_or_click_to_open(self):
+        self.write_charter("IDLE"); self.put("s-idle", "IDLE", self.me(), prompted_at=self.at(6))
+        drow = lambda: self.tree(40).splitlines()[3]; wide = lambda: next((l for l in self.render("--no-color").splitlines() if l.startswith("  dispatcher ")), None)
+        self.assertEqual((drow(), wide()), ("  ◇ dispatcher" + " " * 13 + "click to open", None))
+        self.put("d-live", "dispatcher", self.me(), kind="dispatcher", workstream=None, state="busy")
+        self.needs(["merge PR 12", "answer ALPHA"])
+        self.assertTrue(drow().endswith("watching · 2 need you"), drow())
+        self.assertRegex(wide(), r"^  dispatcher  d-live +watching 0 sessions, 0 PRs · 2 need Ian · engaged 1[45]m more$")
+        self.needs([]); self.assertTrue(drow().endswith(" watching"), drow())
+        self.put("s-idle", "IDLE", self.me(), prompted_at=self.at(31))
+        self.assertTrue(drow().endswith("paused · away 31m"), drow())
+        self.assertRegex(wide(), r"^  dispatcher  d-live +paused \d\d:\d\d, no prompt from Ian for 31m · watches stopped$")
+        self.put("d-live", "dispatcher", self.me(), kind="dispatcher", workstream=None, state="waiting", waiting_for="permission")
+        self.assertTrue(drow().endswith("permission"), drow())
+        self.assertEqual(self.hits()[3], {"key": "dispatcher", "session_id": "d-live", "glyph": "◇", "need": "asks"})
+
+    def test_decide_and_open_the_dispatcher_as_control(self):
+        decide, now = self.decide(), time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        D, reg = {"key": "dispatcher", "session_id": "d-full-id"}, {"sessionId": "d-full-id", "kind": "bg", "jobId": "d-full-i"}
+        self.assertEqual(decide({"key": "dispatcher", "session_id": None}, None), ("dispatch", "dispatcher"))
+        self.assertEqual(decide(D, None, {"state": "idle"}), ("dispatch", "dispatcher"))
+        self.assertEqual(decide(D, reg, {"state": "idle", "waiting_for": None, "last_turn_at": "2020-01-01T00:00:00Z"}), ("restart", "d-full-i"))
+        self.assertEqual(decide(D, reg, {"state": "idle", "waiting_for": None, "last_turn_at": now}), ("attach", "d-full-i"))
+        self.board.mkdir(parents=True, exist_ok=True)
+        (self.board / "tree-rows.json").write_text(json.dumps({"3": {"key": "dispatcher", "session_id": None}}))
+        self.open_line(3, self.BG.replace("control", "dispatcher"))
+        self.assertEqual((Path(self.home) / "claude.log").read_text(), "--bg -n dispatcher --model sonnet --permission-mode auto /workstreams:dispatch\n")
+
+    def look(self, turn, idle=True, **kw):
+        return {"ws": "ALPHA", "kind": "active", "name": "ALPHA", "ctx": 0, "band": 0, "state": "waiting", "why": "replied", "turn": turn,
+                "msg": "Next: open the PR.", "idle": idle, "kids": {}} | kw
+
+    def test_the_watch_says_an_idle_stretch_once(self):
+        changes = self.mod_env().changes
+        said = lambda old, new: [l for l in changes({"s": old}, {"s": new}) if l.startswith("IDLE")]
+        first = self.look(self.at(6)); self.assertEqual(said(self.look(first["turn"]), first), ["IDLE ALPHA manager s 6m: Next: open the PR."])
+        self.assertEqual(said(first, self.look(first["turn"])), [])                        # the same stretch, said already
+        self.assertEqual(said(first, self.look(self.at(4))), [])                           # it worked since: a new stretch, under five minutes
+        self.assertEqual(said(self.look(first["turn"]), self.look(first["turn"], idle=False, state="busy")), [])   # working is never idle
+        self.assertEqual(len(said(first, self.look(self.at(7)))), 1)                       # a later stretch is said again
+
+    def test_a_merge_makes_its_siblings_dirty_or_behind_on_the_next_look_changed_or_not(self):
+        pr_changes = self.mod_env().pr_changes
+        A, B, C, X = "o/r#1", "o/r#2", "o/r#3", "o/other#4"
+        pr = lambda st="OPEN", ms="CLEAN": [st, "abc1234", "", ms]
+        old, after = {A: pr(), B: pr(ms="BEHIND"), C: pr(), X: pr()}, {}
+        new = {A: pr("MERGED", "UNKNOWN"), B: pr(ms="BEHIND"), C: pr(), X: pr()}
+        self.assertEqual(list(pr_changes(old, new, after)), [f"PR {A} → MERGED"])
+        self.assertEqual(after, {B: A, C: A})                                            # another repo's PR is no sibling
+        nxt = {A: pr("MERGED"), B: pr(ms="BEHIND"), C: pr(ms="UNKNOWN"), X: pr(ms="DIRTY")}
+        self.assertEqual(list(pr_changes(new, nxt, after)), [f"PR {B} BEHIND after {A} merged", f"PR {A} merge state → CLEAN", f"PR {X} merge state → DIRTY"])
+        self.assertEqual(after, {C: A})                                                  # GitHub has not recomputed C yet
+        last = {A: pr("MERGED"), B: pr(ms="BEHIND"), C: pr(ms="DIRTY"), X: pr(ms="DIRTY")}
+        self.assertEqual(list(pr_changes(nxt, last, after)), [f"PR {C} DIRTY after {A} merged"]); self.assertEqual(after, {})
+
+    def test_the_watch_reads_every_pr_in_one_query(self):
+        log = Path(self.home) / "gh.log"
+        data = {"data": {"p0": {"pullRequest": {"state": "OPEN", "headRefOid": "abcdef0123", "reviewDecision": None, "mergeStateStatus": "BEHIND"}},
+                         "p1": {"pullRequest": {"state": "MERGED", "headRefOid": "0123456789", "reviewDecision": "APPROVED", "mergeStateStatus": "UNKNOWN"}}, "p2": None}}
+        (self.bin / "gh").write_text(f"#!/bin/sh\necho \"$@\" >> {log}\ncat <<'EOF'\n{json.dumps(data)}\nEOF\n"); (self.bin / "gh").chmod(0o755)
+        self.write_charter("ALPHA", extra='pinned: true\nblocked: "review of https://github.com/octo-org/widgets/pull/12"\n')
+        self.write_charter("BETA", extra="blocked: octo-org/widgets#99\n")             # not pinned: not watched
+        self.assertEqual(subprocess.run([sys.executable, str(HOOK), "pr", "octo-org/gadgets#7"], env=self.env).returncode, 0)
+        mod = self.mod_env(); want = mod.refs()
+        self.assertEqual(want, ["octo-org/gadgets#7", "octo-org/widgets#12"])
+        self.assertEqual(mod.pulls(want + ["octo-org/widgets#13"]), {"octo-org/gadgets#7": ["OPEN", "abcdef0", "", "BEHIND"],
+                                                                   "octo-org/widgets#12": ["MERGED", "0123456", "APPROVED", "UNKNOWN"]})   # one it cannot read is left out
+        (call,) = log.read_text().splitlines()
+        self.assertIn('p0: repository(owner: "octo-org", name: "gadgets") { pullRequest(number: 7)', call)
+        self.assertIn('p1: repository(owner: "octo-org", name: "widgets") { pullRequest(number: 12)', call)
+
+    def test_the_watch_reports_the_gap_then_exits_once_ian_is_away(self):
+        import contextlib, io
+        from unittest import mock
+        self.write_charter("ALPHA", extra="pinned: true\n")
+        self.put("s-alpha-full", "ALPHA", self.me(), state="waiting", waiting_for="replied", last_turn_at=self.at(1), last_message="Done.", prompted_at=self.at(2))
+        mod = self.mod_env(); mod.dstate(lambda d: {"snapshot": {"sessions": {"s-alpha-": self.look(self.at(9), idle=False, state="busy")}, "prs": {}, "after": {}}})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(mod.time, "sleep", side_effect=StopIteration), self.assertRaises(StopIteration): mod.watch()
+        self.assertEqual(out.getvalue().splitlines(), ["ALPHA manager s-alpha- → waiting·replied: Done.", "armed: 1 live sessions across pinned workstreams, 0 PRs"])
+        self.assertEqual(mod.dstate()["snapshot"]["sessions"]["s-alpha-"]["said"][1], "replied")   # a re-armed watch does not say it again
+        self.put("s-alpha-full", "ALPHA", self.me(), prompted_at=self.at(21)); out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(mod.time, "sleep", side_effect=StopIteration): mod.watch()   # returns before any sleep
+        self.assertRegex(out.getvalue(), r"^PAUSED: no prompt from Ian since \d\d:\d\d\n$")
 
     def test_the_plugin_declares_no_settings_hooks_and_loads_the_mod(self):
         root = HOOK.parents[1]
