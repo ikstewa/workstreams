@@ -1770,7 +1770,7 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(self.panel(), [
             "═" * 40,
             "",
-            "☆ ☾ OPEN                    3 goals left",
+            "☾ OPEN                      3 goals left",
             "",
             "Ship the board, then retire the memory",
             "index it replaces.",
@@ -1779,7 +1779,7 @@ class BoardTest(unittest.TestCase):
             "☐ A goal long enough to need a second",
             "  row and then a third, which it never …",
             "☐ Third goal"])
-        head = lambda left: ["═" * 40, "", "☆ ☾ OPEN" + " " * (32 - len(left)) + left]
+        head = lambda left: ["═" * 40, "", "☾ OPEN" + " " * (34 - len(left)) + left]
         self.assertEqual(self.panel(goals='goals:\n  - "[x] Ship"\n'), head("all done") + ["", "Ship the board, then retire the memory", "index it replaces."])
         self.assertEqual(self.panel(goals="")[:3], head("no goals"))
 
@@ -1826,7 +1826,7 @@ class BoardTest(unittest.TestCase):
         self.assertTrue(all(e["key"] == "OPEN" for e in hits.values() if "goal" in e))
         from unittest import mock
         with mock.patch.dict(os.environ, self.env):   # a step and the menu see the rows alone
-            mod = self.module(); self.assertEqual(sorted(map(int, mod.tree_rows())), sorted(n for n, e in hits.items() if "goal" not in e and "pin" not in e))
+            mod = self.module(); self.assertEqual(sorted(map(int, mod.tree_rows())), sorted(n for n, e in hits.items() if "goal" not in e and "snooze_x" not in e))
         lines, hits = self.goal_map(height=18)   # cut on the long goal's second row, which still sends it
         self.assertEqual((lines[-1], hits[len(lines) - 1]["goal"]), ("  row and then a third, which it never …", self.LONG))
 
@@ -1856,39 +1856,8 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(self.click_goal("Short goal")[-1], "send-keys|-t|%9|Enter|")
         self.assertEqual(self.click_goal("Short goal", title="agent view"), ["display-message|-l|workstreams: OPEN is no longer open|"])
 
-    def test_a_pinned_workstream_sits_above_active_in_the_look_of_its_home_group(self):
-        # Pinned, a blocked row keeps its ⏸ and block label and a stale one shows as a dormant row instead of joining the stale line.
-        self.write_charter("HELD", extra=f"blocked: PR #12\nblocked_since: {self.ago(50)}\npinned: true\n"); self.write_charter("OLD", extra="pinned: true\n")
-        self.write_charter("BUSY"); self.put("s-busy", "BUSY", self.me(), state="busy")
-        lines, wide = self.tree(40).splitlines(), self.render("--no-color")
-        self.assertEqual([l for l in lines if l.startswith("▾")], ["▾ Control", "▾ Pinned", "▾ Active"])
-        self.assertEqual(lines[lines.index("▾ Pinned") + 1:lines.index("▾ Active")], ["  ⏸ HELD" + " " * 21 + "PR #12 · 2d", "  ◌ OLD" + " " * 22 + "not started"])
-        self.assertEqual([l for l in wide.splitlines() if l in ("Pinned", "Active")], ["Pinned", "Active"])
-        self.assertEqual([self.group_of(wide, k) for k in ("HELD", "OLD", "BUSY")], ["Pinned", "Pinned", "Active"])
-        self.assertNotIn("stale (1", wide)
-        self.assertEqual(self.row_of("HELD")[1], {"key": "HELD", "session_id": None, "glyph": "⏸"})
-
-    def pin(self, *argv):
+    def cli(self, *argv):
         return subprocess.run([sys.executable, str(HOOK), *argv], capture_output=True, text=True, env=self.env)
-
-    def test_pin_and_unpin_change_only_the_pinned_line(self):
-        self.write_charter("A", extra=self.NOTE_LINE); p = self.charter_path("A"); before = p.read_text()
-        r = self.pin("pin", "A"); self.assertEqual((r.returncode, r.stdout), (0, "A pinned\n"))
-        self.assertEqual(p.read_text(), before.replace("focus: PROJ-1\n", "focus: PROJ-1\npinned: true\n"))
-        at = p.stat().st_mtime_ns; self.pin("pin", "A"); self.assertEqual(p.stat().st_mtime_ns, at)   # already pinned: not rewritten
-        r = self.pin("unpin", "A"); self.assertEqual((r.returncode, r.stdout, p.read_text()), (0, "A unpinned\n", before))
-        r = self.pin("pin", "NOPE"); self.assertEqual((r.returncode != 0, r.stdout), (True, "no charter for NOPE\n"))
-
-    def test_a_click_on_the_panels_key_row_toggles_the_pin(self):
-        from unittest import mock
-        self.put("s-open", "OPEN", self.me()); lines, hits = self.goal_map()
-        line, entry = next((n, e) for n, e in hits.items() if "pin" in e)
-        self.assertEqual((lines[int(line)][:8], entry), ("☆ ☾ OPEN", {"key": "OPEN", "pin": True, "snooze_x": [2, 3]}))
-        with mock.patch.dict(os.environ, self.env):   # a step and the menu see the rows alone
-            self.assertNotIn(int(line), map(int, self.module().tree_rows()))
-        self.board_py("open", str(line), "%9"); self.assertIn("\npinned: true\n", self.charter_path("OPEN").read_text())
-        self.assertEqual(self.goal_map(extra="pinned: true\n")[0][int(line)][:8], "★ ☾ OPEN")
-        self.board_py("open", str(line), "%9"); self.assertNotIn("pinned:", self.charter_path("OPEN").read_text())
 
     # --- snooze: a workstream put aside for a while, out of Ian's way while its sessions run on ---
 
@@ -1933,24 +1902,21 @@ class BoardTest(unittest.TestCase):
         self.assertNotIn("▾ Snoozed", self.tree(40))
         self.assertEqual({h["key"]: h.get("need") for h in hits.values() if h.get("need")}, {"PERM": "asks"})
 
-    def test_snooze_and_unsnooze_write_only_their_line_and_a_snooze_ends_the_pin(self):
+    def test_snooze_and_unsnooze_write_only_their_line(self):
         import calendar
         self.write_charter("A", extra=self.NOTE_LINE); p = self.charter_path("A"); before = p.read_text()
-        p.write_text(before.replace("focus: PROJ-1\n", "focus: PROJ-1\npinned: true\n"))
         until = lambda: re.search(r"^snoozed_until: (\S+)$", p.read_text(), re.M)[1]
         for length, hours in (("90m", 1.5), ("3h", 3), ("1d", 24)):
-            t = time.time(); r = self.pin("snooze", "A", length); at = calendar.timegm(time.strptime(until(), "%Y-%m-%dT%H:%M:%SZ"))
+            t = time.time(); r = self.cli("snooze", "A", length); at = calendar.timegm(time.strptime(until(), "%Y-%m-%dT%H:%M:%SZ"))
             self.assertLess(abs(at - t - hours * 3600), 5, length)
             self.assertEqual((r.returncode, r.stdout), (0, f"A snoozed until {time.strftime('%a %H:%M', time.localtime(at))}\n"), length)
-            self.assertEqual(p.read_text(), before.replace("focus: PROJ-1\n", f"focus: PROJ-1\nsnoozed_until: {until()}\n"), length)   # unpinned
-        iso = self.ahead(2); self.pin("snooze", "A", iso); self.assertEqual(until(), iso)   # an ISO time stands as given, as the panel's menu passes one
+            self.assertEqual(p.read_text(), before.replace("focus: PROJ-1\n", f"focus: PROJ-1\nsnoozed_until: {until()}\n"), length)
+        iso = self.ahead(2); self.cli("snooze", "A", iso); self.assertEqual(until(), iso)   # an ISO time stands as given, as the panel's menu passes one
         for bad in (("5x",), ("90",), ()):
-            r = self.pin("snooze", "A", *bad); self.assertEqual((r.returncode, r.stdout), (1, "give a length such as 90m, 3h or 1d\n"), bad)
+            r = self.cli("snooze", "A", *bad); self.assertEqual((r.returncode, r.stdout), (1, "give a length such as 90m, 3h or 1d\n"), bad)
         self.assertEqual(until(), iso)
-        r = self.pin("unsnooze", "A"); self.assertEqual((r.returncode, r.stdout, p.read_text()), (0, "A unsnoozed\n", before))
-        r = self.pin("snooze", "NOPE", "1h"); self.assertEqual((r.returncode, r.stdout), (1, "no charter for NOPE\n"))
-        self.pin("snooze", "A", "1h"); self.pin("pin", "A")   # and a pin ends a snooze
-        self.assertEqual(p.read_text(), before.replace("focus: PROJ-1\n", "focus: PROJ-1\npinned: true\n"))
+        r = self.cli("unsnooze", "A"); self.assertEqual((r.returncode, r.stdout, p.read_text()), (0, "A unsnoozed\n", before))
+        r = self.cli("snooze", "NOPE", "1h"); self.assertEqual((r.returncode, r.stdout), (1, "no charter for NOPE\n"))
 
     def test_a_permission_or_a_question_ends_the_snooze_and_a_reply_does_not(self):
         # Any session of the workstream, a worker too; a turn, a sub-agent, a reply and an answer leave it snoozed.
@@ -1975,8 +1941,8 @@ class BoardTest(unittest.TestCase):
     def test_a_click_on_the_snooze_mark_offers_1h_3h_and_8am_tomorrow(self):
         import datetime
         self.put("s-open", "OPEN", self.me()); _, hits = self.goal_map()
-        line = next(n for n, e in hits.items() if "pin" in e)
-        (call,) = self.board_py("open", str(line), "%9", "2", "/dev/ttys042")
+        line = next(n for n, e in hits.items() if "snooze_x" in e)
+        (call,) = self.board_py("open", str(line), "%9", "0", "/dev/ttys042")
         flags, items = self.menu_items(call, 3)
         self.assertEqual(flags, ["-M", "-c", "/dev/ttys042", "-T", "snooze OPEN"])
         self.assertEqual([(n, k) for n, k, _ in items], [("1h", "1"), ("3h", "2"), ("1d", "3")])
@@ -1987,14 +1953,13 @@ class BoardTest(unittest.TestCase):
         morning = datetime.datetime.strptime(args[2], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc).astimezone()
         self.assertEqual((args[:2], morning.date(), morning.hour, morning.minute), (["1h", "3h"], datetime.date.today() + datetime.timedelta(days=1), 8, 0))
         self.assertNotIn("snoozed_until", self.charter_path("OPEN").read_text())   # the menu alone writes nothing
-        for x in ("0", "4"):   # the star and the key still pin
-            self.assertEqual(self.board_py("open", str(line), "%9", x, "/dev/ttys042"), [], x); self.assertIn("pinned: true", self.charter_path("OPEN").read_text())
-            self.pin("unpin", "OPEN")
+        for x in ("2", "4"):   # a click on the key does nothing
+            self.assertEqual(self.board_py("open", str(line), "%9", x, "/dev/ttys042"), [], x); self.assertNotIn("snoozed_until", self.charter_path("OPEN").read_text())
         # Snoozed, the mark carries the time left, and a click anywhere on it unsnoozes without a menu.
         rows, hits = self.goal_map(extra=f"snoozed_until: {self.ahead(2)}\n")
-        line, entry = next((n, e) for n, e in hits.items() if "pin" in e)
-        self.assertEqual((rows[int(line)][:11], entry["snooze_x"]), ("☆ ☾ 2h OPEN", [2, 6]))
-        self.assertEqual(self.board_py("open", str(line), "%9", "5", "/dev/ttys042"), [])
+        line, entry = next((n, e) for n, e in hits.items() if "snooze_x" in e)
+        self.assertEqual((rows[int(line)][:9], entry), ("☾ 2h OPEN", {"key": "OPEN", "snooze_x": [0, 4]}))
+        self.assertEqual(self.board_py("open", str(line), "%9", "3", "/dev/ttys042"), [])
         self.assertNotIn("snoozed_until", self.charter_path("OPEN").read_text())
 
     # --- goals on the task list: mirrored from the charter, and ticked back into it ---
@@ -2582,9 +2547,9 @@ class BoardTest(unittest.TestCase):
         (self.board / "open.json").write_text(json.dumps({"open": "WS", "seen": {}})); self.panes("%1\t", "%2\tWS")
         (row,) = bars(); self.assertTrue(row.startswith("▌ ▶ WS"), row)   # the head alone
         from unittest import mock
-        with mock.patch.dict(os.environ, self.env):   # a worker open shows its workstream's panel, and the key row's click pins that workstream
+        with mock.patch.dict(os.environ, self.env):   # a worker open shows its workstream's panel, and the key row's click snoozes that workstream
             mod = self.module(); hits = {}; text = mod.tree(mod.load_records(), width=40, hits=hits, current="w-sweep", height=60)
-        self.assertIn("☆ ☾ WS", text); self.assertEqual([h["key"] for h in hits.values() if "pin" in h], ["WS"])
+        self.assertIn("☾ WS", text); self.assertEqual([h["key"] for h in hits.values() if "snooze_x" in h], ["WS"])
 
     def test_option_e_notes_the_workstream_of_the_worker_open(self):
         self.with_workers()
@@ -2641,6 +2606,200 @@ class BoardTest(unittest.TestCase):
         (self.board / "open.json").write_text(json.dumps({"open": "w-lone", "title": "LONE work: x", "seen": {}}))
         self.panes("%1\t", "%2\tLONE work: x")
         (row,) = [l for l in self.tree(40).splitlines() if "▌" in l]; self.assertTrue(row.startswith("▌ ○ LONE"), row)
+
+    # --- projects: a manager per project, its lease, its row and its watch ---
+
+    def at(self, minutes):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - minutes * 60))
+
+    def mod_env(self):
+        from unittest import mock
+        p = mock.patch.dict(os.environ, self.env); p.start(); self.addCleanup(p.stop); return self.module()
+
+    def project(self, key="SHOP", members=(), extra=""):
+        self.write_charter(key, extra="kind: project\n" + extra)
+        for k in members: self.write_charter(k, created=time.strftime("%Y-%m-%d", time.gmtime()), extra=f"project: {key}\n")
+
+    def test_a_typed_prompt_stamps_its_record_and_a_start_keeps_it(self):
+        self.event("start"); self.event("prompt"); stamp = self.rec()["prompted_at"]
+        self.assertIsNotNone(stamp); self.event("start"); self.assertEqual(self.rec()["prompted_at"], stamp)
+
+    def test_engaged_is_the_newest_prompt_of_any_session_under_twenty_minutes(self):
+        engaged = self.mod_env().engaged
+        self.assertTrue(engaged([{"prompted_at": self.at(120)}, {"prompted_at": self.at(19.9)}, {}])[0])
+        on, s = engaged([{"prompted_at": self.at(20.1)}, {"prompted_at": self.at(90)}])
+        self.assertFalse(on); self.assertAlmostEqual(s, 20.1 * 60, delta=2)
+        self.assertEqual(engaged([{}]), (False, None))
+
+    def test_join_and_leave_write_only_the_project_line_and_refuse_what_is_no_project(self):
+        self.project(); self.project("MALL"); self.write_charter("B"); self.write_charter("A", extra=self.NOTE_LINE)
+        p = self.charter_path("A"); before = p.read_text()
+        r = self.cli("join", "A", "MALL"); r = self.cli("join", "A", "SHOP"); self.assertEqual((r.returncode, r.stdout), (0, "A joined SHOP\n"))
+        self.assertEqual(p.read_text(), before.replace("focus: PROJ-1\n", "focus: PROJ-1\nproject: SHOP\n"))   # the one line, replaced
+        for argv, said in ((("join", "A", "B"), "B is not a project"), (("join", "A", "NOPE"), "NOPE is not a project"),
+                           (("join", "NOPE", "SHOP"), "no charter for NOPE"), (("leave", "NOPE"), "no charter for NOPE")):
+            r = self.cli(*argv); self.assertEqual((r.returncode, r.stdout), (1, said + "\n"), argv)
+        r = self.cli("leave", "A"); self.assertEqual((r.returncode, r.stdout, p.read_text()), (0, "A left its project\n", before))
+
+    def test_a_project_groups_its_manager_then_its_members_by_state_after_control(self):
+        me = self.me(); self.project(members=("PAY", "CART", "CAT", "HELD", "NAP"), extra="repos: [octo-org/widgets, octo-org/gadgets]\n")
+        self.put("s-pay", "PAY", me, state="waiting", waiting_for="permission"); self.put("s-cart", "CART", me, state="busy")
+        self.put("w-cart", "CART", me, kind="worker", name="CART work: review fixes", state="busy")
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        self.write_charter("HELD", today, "project: SHOP\nblocked: PR #12\n"); self.write_charter("NAP", today, f"project: SHOP\nsnoozed_until: {self.ahead(3)}\n")
+        self.write_charter("ORDERS"); self.put("s-orders", "ORDERS", me, state="busy")
+        self.write_charter("FIN", extra="kind: project\n"); f = self.charter_path("FIN"); f.write_text(f.read_text().replace("active", "done"))   # a done project leaves the board
+        lines, wide = self.tree(40).splitlines(), self.render("--no-color")
+        self.assertEqual([l for l in lines if l.startswith("▾")], ["▾ Control", "▾ SHOP", "▾ Active", "▾ Snoozed"])
+        self.assertEqual(lines[lines.index("▾ SHOP") + 1], "  ◇ manager" + " " * 16 + "click to open")
+        hits = self.hits()
+        self.assertEqual([h.get("worker") or h["key"] for _, h in sorted(hits.items())], ["control", "SHOP", "CART", "CART work: review fixes", "PAY", "HELD", "CAT", "ORDERS", "NAP"])
+        self.assertEqual(hits[lines.index("▾ SHOP") + 1], {"key": "SHOP", "session_id": None, "glyph": "◇", "manager": True})
+        self.assertEqual([l for l in wide.splitlines() if not l.startswith(" ")][1:], ["Project SHOP · 5 workstreams · octo-org/widgets, octo-org/gadgets", "Active", "Snoozed"])
+        self.assertTrue(wide.split("Project SHOP")[1].splitlines()[1].startswith("  manager  –"))
+        self.assertEqual([self.group_of(wide, k) for k in ("PAY", "HELD", "CAT", "ORDERS")], [wide.splitlines()[1]] * 3 + ["Active"])
+        self.cli("leave", "PAY"); self.assertEqual(self.group_of(self.render("--no-color"), "PAY"), "Active")   # no project: the state groups, as before
+
+    def needs(self, items, project="SHOP"):
+        p = subprocess.run([sys.executable, str(HOOK), "needs", project], input=json.dumps(items), capture_output=True, text=True, env=self.env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_the_manager_row_reads_watching_paused_click_to_open_or_its_ask(self):
+        self.project(); self.write_charter("IDLE"); self.put("s-idle", "IDLE", self.me(), prompted_at=self.at(6))
+        mrow = lambda: self.tree(40).splitlines()[4]; wide = lambda: next((l for l in self.render("--no-color").splitlines() if l.startswith("  manager ")), None)
+        self.assertEqual(mrow(), "  ◇ manager" + " " * 16 + "click to open")
+        self.put("m-live", "SHOP", self.me(), state="busy", last_turn_at=self.at(1))
+        self.needs(["merge PR 12", "answer ALPHA"])
+        self.assertTrue(mrow().endswith("watching · 2 need you"), mrow())
+        self.assertRegex(wide(), r"^  manager +m-live +watching 0 sessions, 0 PRs · 2 need Ian · engaged 1[45]m more")
+        self.needs([]); self.assertTrue(mrow().endswith(" watching"), mrow())
+        self.put("s-idle", "IDLE", self.me(), prompted_at=self.at(31))
+        self.assertTrue(mrow().endswith("paused · away 31m"), mrow())
+        self.assertRegex(wide(), r"^  manager +m-live +paused \d\d:\d\d, no prompt from Ian for 31m · watches stopped")
+        self.put("m-live", "SHOP", self.me(), state="waiting", waiting_for="permission")
+        self.assertTrue(mrow().endswith("permission"), mrow())
+        self.assertEqual(self.hits()[4], {"key": "SHOP", "session_id": "m-live", "glyph": "◇", "manager": True, "need": "asks"})
+        self.put("m-live", "SHOP", self.me(), state="waiting", waiting_for="replied", last_turn_at=self.at(1))
+        self.assertTrue(mrow().endswith("unread"), mrow()); self.assertEqual(self.hits()[4]["need"], "unread")
+
+    def test_decide_and_open_a_manager_as_control(self):
+        self.project(); decide, now = self.decide(), time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        M, reg = {"key": "SHOP", "session_id": "m-full-id", "manager": True}, {"sessionId": "m-full-id", "kind": "bg", "jobId": "m-full-i"}
+        self.assertEqual(decide({"key": "SHOP", "session_id": None, "manager": True}, None), ("dispatch", "SHOP"))
+        self.assertEqual(decide(M, None, {"state": "idle"}), ("dispatch", "SHOP"))
+        self.assertEqual(decide(M, reg, {"state": "idle", "waiting_for": None, "last_turn_at": "2020-01-01T00:00:00Z"}), ("restart", "m-full-i"))
+        self.assertEqual(decide(M, reg, {"state": "idle", "waiting_for": None, "last_turn_at": now}), ("attach", "m-full-i"))
+        self.board.mkdir(parents=True, exist_ok=True)
+        (self.board / "tree-rows.json").write_text(json.dumps({"3": {"key": "SHOP", "session_id": None, "manager": True}}))
+        self.open_line(3, self.BG.replace("control", "SHOP"))
+        self.assertEqual((Path(self.home) / "claude.log").read_text(), "--bg -n SHOP --model sonnet --permission-mode auto /workstreams:project\n")
+
+    def test_option_n_stops_at_a_project_managers_row(self):
+        self.project(members=("PAY",)); self.write_charter("ZED")
+        self.live("s-shop-full", "SHOP", self.pid(), state="waiting", waiting_for="permission", last_turn_at=self.ago(0.5))
+        self.live("s-pay-full", "PAY", self.pid(), state="waiting", waiting_for="replied", last_turn_at=self.ago(0.5))
+        self.live("s-zed-full", "ZED", self.pid(), state="waiting", waiting_for="question", last_turn_at=self.ago(0.5))
+        self.assertEqual([(h["key"], h.get("need")) for _, h in sorted(self.hits().items())], [("control", None), ("SHOP", "asks"), ("PAY", "unread"), ("ZED", "asks")])
+        here = "agent view"
+        for key in ("SHOP", "PAY", "ZED", "SHOP"):
+            self.assertEqual(self.press("go", "need", "%9", title=here), self.attached(key, f"s-{key.lower()}-full"[:8]), here); here = key
+
+    def test_restart_refuses_a_session_working_or_asking_and_otherwise_starts_it_fresh(self):
+        self.project(members=("PAY",)); pid = self.pid()
+        self.live("s-pay-full", "PAY", pid, last_turn_at=self.ago(0.1))
+        self.board_py("restart", "PAY", claude_out=self.BG.replace("control", "PAY"))
+        self.assertEqual((Path(self.home) / "claude.log").read_text().splitlines(), ["stop s-pay-fu", f"--bg -n PAY --permission-mode auto {self.module().RESUME}"])
+        (Path(self.home) / "claude.log").unlink(); self.later()
+        for kw in ({"state": "busy"}, {"state": "waiting", "waiting_for": "permission"}, {"children": [{"agent_id": "a", "name": "x", "state": "running"}]}):
+            self.live("s-pay-full", "PAY", pid, **kw)
+            r = self.cli("restart", "PAY"); self.assertEqual((r.returncode, r.stdout), (1, "PAY: working or asking Ian, not restarted\n"), kw)
+        r = self.cli("restart", "NOPE"); self.assertEqual((r.returncode, r.stdout), (1, "NOPE: no live session\n"))
+        self.assertFalse((Path(self.home) / "claude.log").exists())
+
+    def test_the_rules_carry_the_chain_of_command_only_with_a_project_and_the_restart_always(self):
+        self.write_charter(); text = self.charter_of()["text"]
+        self.assertIn("when your context runs high you may be stopped and the next session started fresh from the charter.", text)
+        self.assertNotIn("belongs to project", text)
+        self.write_charter(extra="project: SHOP\n"); text = self.charter_of()["text"]
+        self.assertIn("Your workstream belongs to project SHOP. Never message another workstream's sessions, not even an FYI. Anything you need from one, "
+                      "or that one needs from you, goes to SHOP, which decides and relays.", text)
+        self.assertLess(text.index("belongs to project SHOP"), text.index("\n---\n"))   # in the rules, ahead of the frontmatter
+
+    def look(self, turn, idle=True, **kw):
+        return {"ws": "ALPHA", "kind": "active", "name": "ALPHA", "ctx": 0, "band": 0, "state": "waiting", "why": "replied", "turn": turn,
+                "msg": "Next: open the PR.", "idle": idle, "kids": {}} | kw
+
+    def test_the_watch_says_an_idle_stretch_once(self):
+        changes = self.mod_env().changes
+        said = lambda old, new: [l for l in changes({"s": old}, {"s": new}) if l.startswith("IDLE")]
+        first = self.look(self.at(6)); self.assertEqual(said(self.look(first["turn"]), first), ["IDLE ALPHA manager s 6m: Next: open the PR."])
+        self.assertEqual(said(first, self.look(first["turn"])), [])                        # the same stretch, said already
+        self.assertEqual(said(first, self.look(self.at(4))), [])                           # it worked since: a new stretch, under five minutes
+        self.assertEqual(said(self.look(first["turn"]), self.look(first["turn"], idle=False, state="busy")), [])   # working is never idle
+        self.assertEqual(len(said(first, self.look(self.at(7)))), 1)                       # a later stretch is said again
+
+    def test_a_merge_in_a_project_repo_makes_its_siblings_dirty_or_behind_on_the_next_look_changed_or_not(self):
+        pr_changes = self.mod_env().pr_changes
+        A, B, C, X = "o/r#1", "o/r#2", "o/r#3", "o/other#4"
+        pr = lambda st="OPEN", ms="CLEAN": [st, "abc1234", "", ms]
+        old, after = {A: pr(), B: pr(ms="BEHIND"), C: pr(), X: pr()}, {}
+        new = {A: pr("MERGED", "UNKNOWN"), B: pr(ms="BEHIND"), C: pr(), X: pr()}
+        self.assertEqual(list(pr_changes(old, new, after, ["o/other"])), [f"PR {A} → MERGED"]); self.assertEqual(after, {})   # not a repo of the project
+        self.assertEqual(list(pr_changes(old, new, after, ["o/r"])), [f"PR {A} → MERGED"])
+        self.assertEqual(after, {B: A, C: A})                                            # another repo's PR is no sibling
+        nxt = {A: pr("MERGED"), B: pr(ms="BEHIND"), C: pr(ms="UNKNOWN"), X: pr(ms="DIRTY")}
+        self.assertEqual(list(pr_changes(new, nxt, after, ["o/r"])), [f"PR {B} BEHIND after {A} merged", f"PR {A} merge state → CLEAN", f"PR {X} merge state → DIRTY"])
+        self.assertEqual(after, {C: A})                                                  # GitHub has not recomputed C yet
+        last = {A: pr("MERGED"), B: pr(ms="BEHIND"), C: pr(ms="DIRTY"), X: pr(ms="DIRTY")}
+        self.assertEqual(list(pr_changes(nxt, last, after, ["o/r"])), [f"PR {C} DIRTY after {A} merged"]); self.assertEqual(after, {})
+
+    def test_the_watch_reads_every_pr_of_the_project_in_one_query(self):
+        log = Path(self.home) / "gh.log"
+        data = {"data": {"p0": {"pullRequest": {"state": "OPEN", "headRefOid": "abcdef0123", "reviewDecision": None, "mergeStateStatus": "BEHIND"}},
+                         "p1": {"pullRequest": {"state": "MERGED", "headRefOid": "0123456789", "reviewDecision": "APPROVED", "mergeStateStatus": "UNKNOWN"}}, "p2": None}}
+        (self.bin / "gh").write_text(f"#!/bin/sh\necho \"$@\" >> {log}\ncat <<'EOF'\n{json.dumps(data)}\nEOF\n"); (self.bin / "gh").chmod(0o755)
+        self.project(extra="blocked: octo-org/widgets#5\n")
+        self.write_charter("ALPHA", extra='project: SHOP\nblocked: "review of https://github.com/octo-org/widgets/pull/12"\n')
+        self.write_charter("BETA", extra="blocked: octo-org/widgets#99\n")             # not a member: not watched
+        self.assertEqual(subprocess.run([sys.executable, str(HOOK), "pr", "SHOP", "octo-org/gadgets#7"], env=self.env).returncode, 0)
+        r = self.cli("pr", "ALPHA", "octo-org/gadgets#8"); self.assertEqual((r.returncode, r.stdout), (1, "give a project's key: SHOP\n"))
+        mod = self.mod_env(); want = mod.refs("SHOP")
+        self.assertEqual(want, ["octo-org/gadgets#7", "octo-org/widgets#12", "octo-org/widgets#5"])
+        self.assertEqual(mod.pulls(want[:2] + ["octo-org/widgets#13"]), {"octo-org/gadgets#7": ["OPEN", "abcdef0", "", "BEHIND"],
+                                                                        "octo-org/widgets#12": ["MERGED", "0123456", "APPROVED", "UNKNOWN"]})   # one it cannot read is left out
+        (call,) = log.read_text().splitlines()
+        self.assertIn('p0: repository(owner: "octo-org", name: "gadgets") { pullRequest(number: 7)', call)
+        self.assertIn('p1: repository(owner: "octo-org", name: "widgets") { pullRequest(number: 12)', call)
+
+    def watch_once(self, mod):
+        import contextlib, io
+        from unittest import mock
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(mod.time, "sleep", side_effect=StopIteration):
+            try: mod.watch("SHOP")
+            except StopIteration: pass
+        return out.getvalue().splitlines()
+
+    def test_the_watch_reports_its_members_gap_then_exits_once_ian_is_away(self):
+        self.project(members=("ALPHA",)); self.write_charter("BETA")
+        self.put("s-alpha-full", "ALPHA", self.me(), state="waiting", waiting_for="replied", last_turn_at=self.at(1), last_message="Done.", prompted_at=self.at(2))
+        self.put("s-beta-full", "BETA", self.me(), state="waiting", waiting_for="question", last_turn_at=self.at(1))   # not a member: silent
+        mod = self.mod_env(); mod.dstate("SHOP", lambda d: {"snapshot": {"sessions": {"s-alpha-": self.look(self.at(9), idle=False, state="busy")}, "prs": {}, "after": {}}})
+        self.assertEqual(self.watch_once(mod), ["ALPHA manager s-alpha- → waiting·replied: Done.", "armed: 1 live sessions across SHOP's workstreams, 0 PRs"])
+        self.assertEqual(mod.dstate("SHOP")["snapshot"]["sessions"]["s-alpha-"]["said"][1], "replied")   # a re-armed watch does not say it again
+        self.put("s-alpha-full", "ALPHA", self.me(), prompted_at=self.at(21))
+        self.assertRegex("\n".join(self.watch_once(mod)), r"^PAUSED: no prompt from Ian since \d\d:\d\d$")
+
+    def test_the_watch_says_the_5h_quota_crossing_70_and_90_once_a_window(self):
+        self.project(); self.put("s-ian", "X", None, prompted_at=self.at(1)); mod = self.mod_env()
+        tap = Path(self.home) / ".claude" / "rate-limits.json"; first, second = int(time.time()) + 3600, int(time.time()) + 4 * 3600
+        def look(pct, resets):
+            tap.write_text(json.dumps({"five_hour": {"used_percentage": pct, "resets_at": resets}, "seven_day": {"used_percentage": 40, "resets_at": resets + 86400}}))
+            return [l for l in self.watch_once(mod) if l.startswith("QUOTA")]
+        line = lambda pct, resets: f"QUOTA 5h {pct}% resets {time.strftime('%H:%M', time.localtime(resets))} · 7d 40%"
+        self.assertEqual([look(p, first) for p in (65, 72, 75, 69.6, 91, 95)], [[], [line(72, first)], [], [], [line(91, first)], []])
+        self.assertEqual(look(93, second), [line(93, second)])   # a new window says it again, once, at the highest crossed
+        self.assertEqual(self.cli("quota").stdout, f"5h 93% resets {time.strftime('%H:%M', time.localtime(second))} · 7d 40% · read 0m ago\n")
 
     def test_the_plugin_declares_no_settings_hooks_and_loads_the_mod(self):
         root = HOOK.parents[1]
