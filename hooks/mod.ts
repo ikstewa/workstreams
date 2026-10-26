@@ -317,7 +317,7 @@ export const register: Register = (on, options) => {
       st.restart = false
       void begin($, st)
     }
-    // Ian's own prompt, at the terminal or through Remote Control, stamps the dispatcher's lease. A peer's message, a task notification
+    // Ian's own prompt, at the terminal or through Remote Control, stamps the project managers' lease. A peer's message, a task notification
     // or a sub-agent's handback raises this event too, under another origin.
     if (e.origin?.kind === 'composer' || e.origin?.kind === 'bridge') void record($, st, { event: 'prompt' })
     void mirror($, st)

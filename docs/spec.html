@@ -745,17 +745,22 @@
             rest of the charter.
           </p>
           <p>
-            <strong>A pin, while Ian wants one.</strong> <code>pinned: true</code> keeps the workstream in the board's Pinned
-            group (§6). Ian sets and clears it with a click in the sidebar (§9) or through the board skill; nothing else writes
-            it.
+            <strong>A project, when the workstream belongs to one.</strong> A project is a charter in the same directory with
+            <code>kind: project</code>, so it binds, injects and is written as any charter is, goals, block, note and status
+            included, and adds <code>repos:</code>, the <code>owner/repo</code> list its members work in. Membership lives on the
+            member: <code>project: &lt;KEY&gt;</code> on the workstream's charter, which <code>board.py join &lt;KEY&gt;
+            &lt;PROJECT&gt;</code> writes and <code>board.py leave &lt;KEY&gt;</code> removes, one line from a fresh read under the
+            lock. Both refuse a key with no charter and a project key whose charter is not <code>kind: project</code>. A project's
+            member list is derived from those lines and stored nowhere else. Projects and workstreams share one namespace of
+            keys. A project of one workstream is allowed; a workstream with no project reports to Ian and is watched by no
+            manager (§3).
           </p>
           <p>
             <strong>A snooze, while Ian wants the workstream out of his way.</strong> <code>snoozed_until:</code> is an ISO time,
             and until it passes the workstream sits in the board's Snoozed group (§6). Once it passes, the board ignores the line,
             so nothing needs to clear it. A snooze takes the workstream out of Ian's attention, not out of work: its sessions keep
             running. Ian sets it with a click in the sidebar (§9), through the board skill or with <code>board.py snooze</code>,
-            and clears it the same ways. A snooze removes <code>pinned:</code> and a pin removes <code>snoozed_until:</code>, so
-            the two are never both on. When any session or worker of the workstream starts to wait on a permission or a
+            and clears it the same ways. When any session or worker of the workstream starts to wait on a permission or a
             question, the board removes the line, and the snooze ends for good. A reply or a working session leaves it.
           </p>
           <p>
@@ -798,8 +803,8 @@
             workstream. Each produces one advisory line. A semantic pass runs on demand in the board's deep mode, reads
             each workstream's recent activity against its charter, and proposes a fresher focus line or asks whether a
             request belongs elsewhere. Splitting is Ian's act, prompted only when a request does not serve the stated
-            purpose. Workstreams do not nest; charters link to each other, and Jira initiatives already render as the
-            umbrella.
+            purpose. Workstreams do not nest; a project groups them one level deep, charters link to each other, and Jira
+            initiatives already render as the umbrella.
           </p>
           <p>
             <strong>An idle workstream</strong> is one whose record has a non-terminal status and no live session. The board groups by assignment, by block and, with nothing live, by goals (Active, Blocked, Idle, Unassigned, Done); a session's status colours its row and moves it only between Active and Blocked, or Active and Done for a finished workstream (§6). A <code>done</code> workstream stays on the board, labelled <code>done</code>, while a session of it is still live, in Done unless that session is working or asking Ian (then Active), and leaves the board when none is.
@@ -813,9 +818,11 @@
         <section id="control">
           <div class="sec-head"><span class="idx">03</span><h2>Control</h2></div>
           <p>
-            The board's Control header holds two sessions that belong to no workstream: <strong>control</strong>, the
-            passive view, and <strong>the dispatcher</strong>, the active one. Each is a session by its name,
-            <code>control</code> or <code>dispatcher</code>, and the sidebar always draws a row for each (§9).
+            Two kinds of session stand above the workstreams. <strong>Control</strong>, the passive view, is one
+            session above every project, named <code>control</code>, alone under the board's Control header. A <strong>project
+            manager</strong>, the active view of one project, is the session named by the project's key, drawn first in that
+            project's group (§9). Sessions answer upward: a worker to its workstream's manager, a member's manager to its
+            project's manager, and a project's manager and a workstream with no project to Ian.
           </p>
           <h3>Control, the passive view</h3>
           <p>
@@ -840,29 +847,30 @@
             design would fill its context and make it a member instead of the reader. It dispatches the
             workstream's active session and stays out of it.
           </p>
-          <h3>The dispatcher, the active view</h3>
+          <h3>Project managers, the active view</h3>
           <p>
-            The dispatcher keeps every manager (a pinned workstream's active session) and every worker of one busy, so that no
-            session waits at a watering hole: idle on a step already settled, or on a PR that has moved. It runs on Sonnet in
-            auto mode with <code>/workstreams:dispatch</code> as its first prompt, started from its sidebar row as control is.
-            It is one session beside control, not a mode of it, because its model and its lifetime differ: control is a
-            strong model Ian talks to, the dispatcher a cheap one that reacts to a stream of events.
+            A project's manager keeps every member's manager and every worker of one busy, so that no session waits at a
+            watering hole: idle on a step already settled, or on a PR that has moved. It binds to the project's charter as any
+            active session binds (§4), and is started from its row on Sonnet in auto mode with <code>/workstreams:project</code>
+            as its first prompt. It is a session beside control, not a mode of it, because its model and its lifetime differ:
+            control is a strong model Ian talks to, a manager a cheap one that reacts to a stream of events.
           </p>
           <p>
             <strong>It acts only while Ian is engaged.</strong> The mod stamps <code>prompted_at</code> on a session's record
             each time Ian submits a prompt there (§7), and Ian is engaged while the newest stamp across every record is under
             twenty minutes old. The lease is one function, <code>engaged()</code>, which the watch and the sidebar both
-            read. When it lapses the watch prints one <code>PAUSED</code> line and exits, and the dispatcher ends that turn
-            without messaging anyone: a nudge nobody sees only starts work Ian cannot steer. On Ian's next prompt to the
-            dispatcher it starts the watch again, which first prints what changed since its last saved look, and the reply leads
-            with that gap.
+            read. When it lapses the watch prints one <code>PAUSED</code> line and exits, and the manager ends that turn
+            without messaging anyone: a nudge nobody sees only starts work Ian cannot steer. On Ian's next prompt to it it
+            starts the watch again, which first prints what changed since its last saved look, and the reply leads with that
+            gap. A message sent to it starts a turn at any time, lease or no lease, and it answers.
           </p>
           <p>
-            <strong>The watch</strong>, <code>board.py watch</code>, runs under the dispatcher's Monitor tool and prints one
-            line per change in the live managers and workers of pinned workstreams, read every ten seconds: a turn finished;
-            a new permission or question wait, once for a run of prompts within one turn; a session appearing or ending; a
-            sub-agent finishing; context crossing 50, 70 or 85% of a one-million-token window. It keeps its last look in
-            <code>board/dispatcher.json</code> (§6), so a watch started again reports the gap.
+            <strong>The watch</strong>, <code>board.py watch &lt;PROJECT&gt;</code>, runs under the manager's Monitor tool and
+            prints one line per change in the live managers and workers of the project's members, read every ten seconds: a
+            turn finished; a new permission or question wait, once for a run of prompts within one turn; a session appearing
+            or ending; a sub-agent finishing; context crossing 50, 70 or 85% of a one-million-token window. A session of a
+            workstream outside the project prints nothing. It keeps its last look in <code>board/project-&lt;KEY&gt;.json</code>
+            (§6), so a watch started again reports the gap.
           </p>
           <p>
             <strong>The idle hunt.</strong> A manager or worker that is not working, not asking and has no sub-agent running
@@ -870,28 +878,49 @@
             last turn, so the line comes once a stretch, and the next turn starts a new one.
           </p>
           <p>
-            <strong>PRs.</strong> The watch reads the PRs named in pinned charters' <code>blocked:</code> lines, as a URL or
-            <code>owner/repo#n</code>, and those Ian names to the dispatcher, kept in <code>dispatcher.json</code>. Every twenty
-            seconds one <code>gh api graphql</code> query reads all of them, and a line marks a merge or a close, a new head,
-            a review decision and a merge state that changed. A merge marks every open watched PR of the same repository, and
-            the next look that finds one of them <code>DIRTY</code> or <code>BEHIND</code> says so as caused by that merge,
-            whether or not its state changed: a sibling's merge is the commonest watering hole, and a PR already behind is
-            further behind after it. GitHub answers <code>UNKNOWN</code> until it has recomputed, so the mark waits past that.
-            The board calls nothing outside the machine (§8); the watch reads GitHub, and only while Ian is engaged.
+            <strong>PRs.</strong> The watch reads the PRs named in the <code>blocked:</code> lines of the project's charter and
+            its members', as a URL or <code>owner/repo#n</code>, and those named with <code>board.py pr &lt;PROJECT&gt;</code>.
+            Every twenty seconds one <code>gh api graphql</code> query reads all of them, and a line marks a merge or a close,
+            a new head, a review decision and a merge state that changed. A merge in a repo the project's <code>repos:</code>
+            lists marks every open watched PR of that repo, and the next look that finds one of them <code>DIRTY</code> or
+            <code>BEHIND</code> says so as caused by that merge, whether or not its state changed: a sibling's merge is the
+            commonest watering hole, and a PR already behind is further behind after it. GitHub answers <code>UNKNOWN</code>
+            until it has recomputed, so the mark waits past that. The board calls nothing outside the machine (§8); the watch
+            reads GitHub, and only while Ian is engaged.
           </p>
           <p>
-            <strong>Authority.</strong> The dispatcher acts only on what a charter or Ian already settled. It relays a merge to
-            the manager whose record says what follows; it nudges an idle session onto a step that its own last message or its
+            <strong>Quota.</strong> The watch reads <code>~/.claude/rate-limits.json</code>, which a status-line tap writes,
+            and prints <code>QUOTA 5h N% resets HH:MM · 7d N%</code> when the 5h window's use crosses 70% and again at 90%, each
+            once a window. Each reply of the manager opens with the 5h and 7d percent, the reset time and the reading's age,
+            from <code>board.py quota</code>. At 90% or more it starts no new workers, asks the managers to hold new ones,
+            batches its messages harder, and tells Ian before work stalls.
+          </p>
+          <p>
+            <strong>Chain of command.</strong> Members never message each other, not even an FYI: what one needs from another
+            goes to the project's manager, which decides it where a charter already does and otherwise relays it, batched.
+            Each member reports up in one line when it opens, merges or closes a PR, sets or clears a block, or changes
+            something another member may depend on (§4). With members' PRs open in one shared repo the manager settles their
+            merge order, and after a merge it tells each member whose watched PR there went <code>DIRTY</code> or
+            <code>BEHIND</code> to merge master. These are rules the sessions read, not checks the mod enforces.
+          </p>
+          <p>
+            <strong>Restart from the charter.</strong> When a member's manager is idle (not working, not asking Ian, no
+            sub-agent running) and its context is at 70% or more, the project's manager asks it to bring its charter record
+            current, and once it has replied runs <code>board.py restart &lt;KEY&gt;</code>. That stops the session and starts
+            a fresh one from its charter, by the same path as a click on a cold row's <code>↻</code> (§4), under the same
+            15-second hold; it refuses a session that is working or asking Ian. Workers are not restarted: each is fresh for
+            its task (§5).
+          </p>
+          <p>
+            <strong>Authority.</strong> The manager acts only on what a charter or Ian already settled. It relays a merge to
+            the member whose record says what follows; it nudges an idle session onto a step that its own last message or its
             charter's focus names and that needs nothing from Ian, once a stretch, and a session still idle after the nudge goes
-            on Ian's list; it tells a manager whose PR is <code>DIRTY</code> or <code>BEHIND</code> to merge master, and the push
-            stays that manager's ask to Ian. At 70% context on an idle session it has the manager write its charter record and
-            hands Ian a <code>/compact</code> line to paste, since a slash command sent as a message arrives as text. New
-            decisions, merges, pushes, restarts and anything that leaves the machine go to Ian.
+            on Ian's list. New decisions, merges, pushes and anything that leaves the machine go to Ian.
           </p>
           <p>
-            <strong>One Needs-Ian list.</strong> Each reply leads with one deduplicated list of what waits on Ian, current rather
-            than a replay of events: idle sessions whose next step is his go, longest idle first, then held approvals, then the
-            rest. The dispatcher writes it to <code>dispatcher.json</code> with <code>board.py needs</code>, and the sidebar's
+            <strong>One Needs-Ian list.</strong> Each reply leads, after the quota, with one deduplicated list of what waits on
+            Ian, current rather than a replay of events: idle sessions whose next step is his go, longest idle first, then held
+            approvals, then the rest. The manager writes it with <code>board.py needs &lt;PROJECT&gt;</code>, and its row's
             count reads it. It sends a push notification only for a new blocking item.
           </p>
         </section>
@@ -965,6 +994,8 @@
             <li>When a request falls outside the charter, say so and offer the three exits.</li>
             <li>When the work waits on something outside the session and not on Ian, set a block with the tool, and clear it once it clears; picked up or reopened with a block set, first check whether it still holds.</li>
             <li>The charter's <code>note:</code> line is Ian's own: read it. The tool cannot change it.</li>
+            <li>Anything that must survive a restart goes into the charter, not only into a message: when the context runs high the session may be stopped and the next started fresh from the charter (§3).</li>
+            <li>With <code>project: &lt;P&gt;</code> on the charter, and only then: never message another workstream's sessions, not even an FYI; what one needs from another goes to <code>P</code>, which decides and relays; report up to <code>P</code> in one line on opening, merging or closing a PR, on setting or clearing a block, and on changing something another workstream may depend on, such as a shared repo, schema, API or release.</li>
           </ul>
           <p>
             <strong>The active session is disposable.</strong> Dispatch starts it. <code>claude stop</code> from
@@ -1045,7 +1076,7 @@
           <div class="sec-head"><span class="idx">06</span><h2>The board</h2></div>
           <p>
             The board is a directory of small JSON files, one per session keyed by session id, plus
-            <code>control.json</code> and the dispatcher's <code>dispatcher.json</code>, at
+            <code>control.json</code> and each project manager's <code>project-&lt;KEY&gt;.json</code>, at
             <code>~/.claude/projects/&lt;project&gt;/board/</code>. Every session in a project
             and any of its worktrees resolves to that directory: <code>board.py</code>
             strips the <code>/.worktrees/…</code> suffix from the project path to reach it. It is
@@ -1055,16 +1086,17 @@
           </p>
           <p>
             <strong>A record carries</strong> the session id and pid, the workstream from the name, its kind (the active
-            session, a worker, or <code>control</code> or <code>dispatcher</code>, which carry no workstream), cwd and repo and branch, state (<code>busy</code>,
+            session, a worker, or <code>control</code>, which carries no workstream), cwd and repo and branch, state (<code>busy</code>,
             <code>idle</code>, <code>waiting</code>, <code>ended</code>), what it is waiting for and since when, the last
             assistant message truncated, its children with their states, context size and cache warmth written by the
             statusline, and timestamps, among them <code>prompted_at</code>, the last time Ian submitted a prompt in that
-            session, which a start keeps and the dispatcher's lease reads (§3).
+            session, which a start keeps and the project managers' lease reads (§3).
           </p>
           <p>
-            <strong><code>dispatcher.json</code> is the dispatcher's own state</strong>: the watch's last look at the sessions
-            and the PRs, the PRs Ian named to watch, and the dispatcher's current Needs-Ian list. The watch and the dispatcher's
-            <code>board.py needs</code> and <code>board.py pr</code> each write only their own keys, under the board's lock.
+            <strong><code>project-&lt;KEY&gt;.json</code> is a project manager's own state</strong>: the watch's last look at
+            the sessions, the PRs and the quota window, the PRs named to watch, and the manager's current Needs-Ian list. The
+            watch and the manager's <code>board.py needs</code> and <code>board.py pr</code> each write only their own keys, under
+            the board's lock.
           </p>
           <p>
             <strong>Registration is involuntary.</strong> The mod writes the record from the engine's own events, one
@@ -1118,12 +1150,15 @@
             workstream's goals left, in the yellow and dim of an unread and a read reply.
           </p>
           <p>
-            <strong>Pinned is the first group, after Control, and holds what Ian pinned.</strong> A charter with a
-            <code>pinned: true</code> line (§2), which only Ian's click or <code>board.py pin</code> sets, moves its rows from
-            the group they would otherwise be in to Pinned, sorted by key. A pinned row looks and acts as it would in that
-            group: glyph, label, colour, cap on a Blocked label, click and need. The pin is read from every charter, and it
-            moves only rows the board already shows, except that a pinned workstream never collapses into the stale line: it
-            stays visible as a dormant row.
+            <strong>Each project is a group, after Control and ahead of the state groups.</strong> Projects follow in key order,
+            each headed by its key. The group holds the project manager's row first (§9), then its member workstreams, ordered
+            by the group each would otherwise be in (Active, Blocked, Idle, Done) and then by key, each with its workers nested
+            as anywhere else. A member row looks and acts as it would in that group: glyph, label, colour, cap on a Blocked
+            label, click and need. A snoozed member leaves its project's group for Snoozed. A project charter never collapses
+            into the stale line, so its manager's row always shows; members collapse as any workstream does. A project with
+            <code>status: done</code> leaves the board, and its members return to the state groups. A workstream with no
+            project sits in the state groups below. The wide board heads each project with
+            <code>Project &lt;KEY&gt; · N workstreams · &lt;repos&gt;</code>, then a <code>manager</code> line, then the members.
           </p>
           <p>
             <strong>Blocked sits between Active and Idle, and holds only what is not Ian's move.</strong> A workstream whose
@@ -1304,14 +1339,14 @@
             shows its workstream's charter.
           </p>
           <p>
-            <strong>The Control header always draws two rows</strong>, <code>◆ control</code> and then
-            <code>◇ dispatcher</code>, each <code>click to open</code> while no such session is live. A click on either opens
-            the live one, starts one when none is live, and replaces one that is cold and not working. Control's row shows its
-            session's state as any row does. The dispatcher's shows its lease: <code>watching</code>, with
-            <code>· N need you</code> from its Needs-Ian list when that is not empty, while Ian is engaged, and
+            <strong>The Control header always draws one row</strong>, <code>◆ control</code>, and each project's group (§6)
+            starts with its manager's, <code>◇ manager</code>; each reads <code>click to open</code> while no such session is
+            live. A click on either opens the live one, starts one when none is live, and replaces one that is cold and not
+            working. Control's row shows its session's state as any row does. A manager's shows its lease: <code>watching</code>,
+            with <code>· N need you</code> from its Needs-Ian list when that is not empty, while Ian is engaged, and
             <code>paused · away 16m</code> once he is not. An ask or an unread reply shows over either, in its red or yellow,
-            and is what Option+n stops on. The wide board lists a live dispatcher under control with what it watches, the count
-            and how long the lease has left, or when it paused.
+            and is what Option+n stops on. The wide board's <code>manager</code> line says what the watch covers, the count and
+            how long the lease has left, or when it paused.
           </p>
           <p>
             A click on a row opens its session in the right pane (§4). tmux passes the click's column with its line, and a
@@ -1326,7 +1361,7 @@
             listing says the session waits for), or a yellow reply he has not read. It measures from the row open now, even one
             that needs nothing, so pressing again goes on down the sidebar. A reply he has read is passed over, and so is every
             Blocked row, which waits on someone else, every Snoozed row, which Ian put aside, and every worker row and sub-agent
-            line: Option+n stops only at a workstream's own session. Control and the dispatcher count like any row.
+            line: Option+n stops only at a workstream's own session. Control and a project's manager count like any row.
             It opens only a row whose click would attach; with nothing to open it says so. Option+m opens a menu of every row, and picking an
             item is a click on that row. Option+e notes the workstream open in the right pane (below). The bindings apply only
             inside the <code>ws</code> tmux session; elsewhere each key reaches the pane unchanged.
@@ -1362,17 +1397,12 @@
             answer it first. Anything already typed in the prompt is sent with it.
           </p>
           <p>
-            <strong>A click on the key row pins or unpins.</strong> The panel's key row starts with <code>☆</code>, or
-            <code>★</code> when the workstream is pinned (§2), and a click on it toggles the pin. The sidebar redraws at once, as it
-            does for an open, because the watch also wakes when the charter directory changes.
-          </p>
-          <p>
-            <strong>A click on the key row's <code>☾</code> snoozes or unsnoozes.</strong> Beside the pin the key row carries
+            <strong>A click on the key row's <code>☾</code> snoozes or unsnoozes.</strong> The key row starts with
             <code>☾</code>, followed by the time left while the workstream is snoozed (§2). A click on it opens a tmux menu of 1h,
             3h and 1d on the client that clicked, and an item runs <code>board.py snooze</code>. In the menu, 1d means 08:00
             tomorrow, local time, which the item passes to the command as an ISO time; the command's own <code>1d</code> is 24
-            hours. A click on the mark of a snoozed workstream unsnoozes it, with no menu. A click anywhere else on the key row
-            pins or unpins. Every other row of the panel is display only, and neither a goal's rows nor the key row are stops
+            hours. A click on the mark of a snoozed workstream unsnoozes it, with no menu, and a click elsewhere on the key row
+            does nothing. The sidebar redraws at once, because the watch also wakes when the charter directory changes. Every other row of the panel is display only, and neither a goal's rows nor the key row are stops
             for the keys or items in the menu.
           </p>
           <p>
@@ -1401,12 +1431,12 @@
           <ul>
             <li>
               <strong>By construction.</strong> The hook acts only on a session named <code>control</code> or
-              <code>dispatcher</code> or bound by name to a workstream charter. Every other session gets a board record under its
+              bound by name to a charter, a project's included. Every other session gets a board record under its
               derived name and nothing else: no injected context, no holds, no forwarding. The charter interview, the board, the
-              dispatch recipe and the dispatcher's <code>/workstreams:dispatch</code> are skills invoked on purpose.
+              dispatch recipe and a project manager's <code>/workstreams:project</code> are skills invoked on purpose.
             </li>
             <li>
-              <strong>By packaging.</strong> The hook, the skill and the statusline snippet ship as a plugin, provisionally
+              <strong>By packaging.</strong> The hook, the skills (<code>board</code> and <code>project</code>) and the statusline snippet ship as a plugin, provisionally
               <code>workstreams</code>, enabled at user scope in <code>~/.claude/settings.json</code>. A project's checked-in
               settings carry none of it. A contributor who does not enable the plugin sees no change; one who does gets it in
               every project, which is right, because workstreams are a person's way of working rather than a repository's.
@@ -1431,7 +1461,10 @@
                 <li>Every charter has goals, and every goal ticked is its stopping condition. A charter without them is flagged, not refused; one with every goal ticked is proposed for closing, never closed on its own.</li>
                 <li>A block lives on the charter, set and cleared only by the workstream's session; anything Ian can act on shows in Active over it.</li>
                 <li>One control session, stateless, belonging to no workstream.</li>
-                <li>The dispatcher is a separate session, not a mode of control: its model and its lifetime differ.</li>
+                <li>Projects, not pins, decide what a manager watches: a project is a charter with <code>kind: project</code>, and membership is the member's <code>project:</code> line.</li>
+                <li>One manager per project, not one dispatcher over every workstream; a separate session from control, since its model and its lifetime differ.</li>
+                <li>A manager whose context runs high is restarted from its charter, never compacted.</li>
+                <li>Members never message each other, an FYI included; everything between them goes through the project's manager.</li>
                 <li>One active session per workstream, background by default, no roles.</li>
                 <li>A click reopens a row's own session and a reset replaces it; no prompt is held; capture is continuous; work lives in sub-agents and workers.</li>
                 <li>The agent view is the switcher; tabs are an escape hatch.</li>

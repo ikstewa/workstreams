@@ -15,7 +15,7 @@ uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" render --no-color
 ```
 Present it with the template below. The render decides *what* is on the board: every group, row, `note:` and `last:` line, child and the stale line it prints appears, in its order, and nothing it does not print is added. The template decides only *how* it looks. The tmux sidebar is the same board, narrow, so the two always agree.
 
-Template (groups in the render's order, Control, Pinned, Active, Blocked, Idle, Unassigned, Done, Snoozed; omit a group the render omits; `…` repeats):
+Template (groups in the render's order, Control, one group per project under its `Project <KEY> · …` header, Active, Blocked, Idle, Unassigned, Done, Snoozed; omit a group the render omits; `…` repeats):
 ```markdown
 ## Workstream board · <weekday> <d> <Mon>, <HH:MM> <local tz>
 
@@ -41,6 +41,12 @@ Filled:
 **Control**
 - **control** `db9b4d1c` · waiting · unread
 
+**Project CHECKOUT_PLATFORM** · 2 workstreams · octo-org/widgets
+- **manager** `5c1e09aa` · watching 4 sessions, 2 PRs · 1 need Ian · engaged 12m more · Refund flow before the pricing change.
+- **CART_UI** `7f3a2b10` · working · 2 goals left · Review fixes for the cart PR.
+  - ↳ worker CART_UI work: review fixes `e41d07c2` · working · widgets/cart-fixes
+- **CATALOG** `–` · 3 goals left · Catalog import designed.
+
 **Active**
 - **ONBOARDING** `91d5bdf5` · waiting · unread · 1 goal left · 0.0h · Signup flow shipped 09-26; next is the welcome emails.
   - note: parked until the design review lands
@@ -63,21 +69,21 @@ Filled:
 
 _stale (38, no session in 3d): PAYMENTS_API, PROJ-31, PROJ-44, …_
 ```
-A Pinned row is a workstream Ian pinned; the row keeps the state of the group it would otherwise be in. A Blocked row waits on something outside its session, such as a review or a merge, and is not Ian's move. A Done row has every goal ticked and no live session, or is a `done` workstream whose live session is neither working nor asking Ian. A Snoozed row is a workstream Ian put aside until a time: its sessions run on, and the row shows only the time left.
+A project's group holds its manager's row first, then its member workstreams, each keeping the state of the group it would otherwise be in. A Blocked row waits on something outside its session, such as a review or a merge, and is not Ian's move. A Done row has every goal ticked and no live session, or is a `done` workstream whose live session is neither working nor asking Ian. A Snoozed row is a workstream Ian put aside until a time: its sessions run on, and the row shows only the time left.
 
 The filled example truncates the stale line for space; yours never does. Grouping, liveness, labels, the goal count, the duplicate flag and the stale line are `place()` in `hooks/board.py` (spec §6; a dormant row's goal label, §2), not something to recompute here.
 
-## Pin and unpin
+## Projects
 
-Only when Ian asks to pin or unpin a workstream; the board never pins on its own judgment:
+A project is a charter with `kind: project` and a `repos:` line (`repos: [octo-org/widgets]`); its manager is the session named by its key, started from its sidebar row. Only when Ian asks, add a workstream to a project or take it out; membership is the workstream's own `project:` line:
 ```bash
-uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" pin <KEY>
-uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" unpin <KEY>
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" join <KEY> <PROJECT>
+uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" leave <KEY>
 ```
 
 ## Snooze and unsnooze
 
-Only when Ian asks to snooze or unsnooze a workstream; the board never snoozes on its own judgment. The length is minutes, hours or days, such as `90m`, `3h` or `1d`. A snooze removes the pin, and a permission or a question from any session of the workstream ends it:
+Only when Ian asks to snooze or unsnooze a workstream; the board never snoozes on its own judgment. The length is minutes, hours or days, such as `90m`, `3h` or `1d`. A permission or a question from any session of the workstream ends it:
 ```bash
 uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" snooze <KEY> <length>
 uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" unsnooze <KEY>

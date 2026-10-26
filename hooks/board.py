@@ -43,15 +43,14 @@ def save_record(rec):
 def new_record(event, reg):
     name = (reg or {}).get("name") or "unnamed"
     repo, branch = repo_branch(event.get("cwd"))
-    kind = "worker" if " work: " in name else name if name in SOLO else "active"
+    kind = "worker" if " work: " in name else ("control" if name == "control" else "active")
     return {"session_id": event["session_id"], "pid": (reg or {}).get("pid"), "name": name,
-            "workstream": name.split(" work: ")[0] if kind not in SOLO else None, "kind": kind,
+            "workstream": name.split(" work: ")[0] if kind != "control" else None, "kind": kind,
             "cwd": event.get("cwd"), "repo": repo, "branch": branch, "permission_mode": event.get("permission_mode"),
             "state": "idle", "waiting_for": None, "waiting_since": None, "last_message": None, "children": [],
             "last_turn_at": None, "record_synced_at": None, "started_at": NOW(), "ended_reason": None}
 
 IDENTITY, ASKS = ("pid", "name", "workstream", "kind"), ("permission", "question")
-SOLO = ("control", "dispatcher")   # the sessions under the board's Control header, bound to no workstream, each a kind named as its session
 
 def identity(sid, cwd=None):
     """(the session's record, every key present, what new_record() makes of it now). Its identity follows the registry file naming
@@ -92,7 +91,7 @@ def event(sid, ev):
         rec["children"] = [c for c in rec["children"] if c["agent_id"] != ev.get("agent_id")]
     elif kind == "end":
         rec.update(state="ended", ended_reason=ev.get("reason"))
-    elif kind == "prompt": rec["prompted_at"] = now   # Ian typed one: the newest, any session's, starts the dispatcher's lease, engaged()
+    elif kind == "prompt": rec["prompted_at"] = now   # Ian typed one: the newest, any session's, starts the project managers' lease, engaged()
     else: raise ValueError(f"unknown event: {kind!r}")
     save_record(rec)
     if kind == "ask": snooze(rec["workstream"])   # a permission or a question wants Ian: it ends the workstream's snooze for good
@@ -342,7 +341,12 @@ BOUND_RULES = ("You are the active session for this workstream. Work through sub
                "When a request falls outside the charter's scope, say so and offer three exits: extend the scope, do it unattached, or start or attach to another workstream. "
                "When the work waits on something outside your control and not on Ian, such as a review, someone's feedback or a merge, set a block with the tool "
                "and clear it once it clears. When you are picked up or reopened with a block set, first check whether it still holds. "
-               "The charter's note: line is Ian's own: read it. The tool cannot change it.")
+               "The charter's note: line is Ian's own: read it. The tool cannot change it. "
+               "Anything that must survive a restart goes into the charter, not only into a message: when your context runs high you may be stopped "
+               "and the next session started fresh from the charter.")
+CHAIN = (" Your workstream belongs to project {p}. Never message another workstream's sessions, not even an FYI. Anything you need from one, "
+         "or that one needs from you, goes to {p}, which decides and relays. Report up to {p} in one line when you open, merge or close a PR, "
+         "when you set or clear a block, and when you change something another workstream may depend on, such as a shared repo, schema, API or release.")
 
 WORKER_BRIEF = ("# Workstream charter (worker of {key})\n\n"
                 "You are a worker of workstream {key}. You start at the project root: enter your own worktree before you edit anything. "
@@ -363,7 +367,8 @@ def charter_text(path, fm, body, refresh=False):
             if l.startswith("goals:"): keep.append(f"# {len(gone)} done goals omitted")
             pos += len(l) + 1
         fm = "\n".join(keep)
-    text = f"# Workstream charter ({path})\n\n# Operating rules\n{BOUND_RULES}\n\n---\n{fm}\n---"
+    chain = CHAIN.format(p=p) if (p := scalar(fm, "project")) else ""
+    text = f"# Workstream charter ({path})\n\n# Operating rules\n{BOUND_RULES}{chain}\n\n---\n{fm}\n---"
     if refresh: return text
     body = body.strip()
     if len(body) > RECORD_BUDGET:
@@ -435,7 +440,7 @@ def load_records():
     """Every board record, or the one line naming the first record render() cannot use."""
     records = []
     for rp in sorted(board_dir().glob("*.json")):
-        if rp.name in ("tree-rows.json", "open.json", "dispatcher.json"): continue   # the sidebar's click map, what Ian has seen and the dispatcher's state, not session records
+        if rp.name in ("tree-rows.json", "open.json") or rp.name.startswith("project-"): continue   # the sidebar's click map, what Ian has seen and each project manager's state, not session records
         try:
             rec = json.loads(rp.read_text())
         except Exception:
@@ -511,6 +516,13 @@ def notes():
     """{key: note} for every charter carrying one, whatever its status, as find_charter() finds a charter."""
     return {k: n for k, (fm, _) in charters(skip=()).items() if (n := scalar(fm, "note"))}
 
+def projects(chart=None):
+    """{key: frontmatter} for every project, a charter with `kind: project`, whose status is not done or archived."""
+    return {k: fm for k, (fm, _) in (chart or charters()).items() if scalar(fm, "kind") == "project"}
+
+members = lambda p, chart=None: [k for k, (fm, _) in (chart or charters()).items() if scalar(fm, "project") == p]   # derived, never stored on the project
+repos = lambda fm: re.findall(r"[\w.-]+/[\w.-]+", scalar(fm, "repos") or "")   # a project's repos: line, owner/repo each
+
 def listing():
     """sessionId -> `claude agents --json --all` row. A state source only; any failure is no extra state."""
     import subprocess
@@ -521,9 +533,9 @@ def listing():
         return {}
 
 # Grouped by assignment, a charter's block and, with nothing live, its goals: a status change recolours a row, and moves it only between Active and Blocked.
-# A pinned workstream's rows go to Pinned, drawn as they would be in the group they would otherwise land in. A snoozed one's go to Snoozed,
-# drawn as one dim line of its time left.
-GROUPS = ("Pinned", "Active", "Blocked", "Idle", "Unassigned", "Done", "Snoozed")
+# A project's rows and its members' go to the project's own group, ahead of these, each drawn as it would be in the group it would otherwise
+# land in. A snoozed workstream's rows go to Snoozed, drawn as one dim line of its time left.
+GROUPS = ("Active", "Blocked", "Idle", "Unassigned", "Done", "Snoozed")
 SNOOZE = "☾"
 
 def block_of(fm):
@@ -551,11 +563,11 @@ def oneline(text, n=100):
 def place(records):
     """What is on the board, deterministically: (live control records, group -> rows, stale keys). Both layouts format this."""
     rows, chart, sn = listing(), charters(), seen()
-    pins = {k for k, (fm, _) in charters(skip=()).items() if scalar(fm, "pinned") == "true"}   # whatever the status, as notes() reads
+    projs = sorted(projects(chart)); of = {k: p for p in projs for k in [p, *members(p, chart)]}   # the group a charter's rows go to
     naps = {k: remaining(s) for k, (fm, _) in charters(skip=()).items() if (s := snoozed(fm))}   # time left, carried in a Snoozed row's note
     def land(home, key, note, lines):
         nap = key in naps and not any(l[2] == "31" for l in lines)   # a snooze never hides an ask, even one older than the snooze
-        placed["Snoozed" if nap else "Pinned" if key in pins else home].append((home, key, naps[key] if nap else note, lines))
+        placed["Snoozed" if nap else of.get(key, home)].append(("manager" if key in projs else home, key, naps[key] if nap else note, lines))
     done = set(charters(skip=("archived",))) - set(chart)   # finished: shown only while a session of it is still live
     # A reply is unread until Ian opens its session from the sidebar, a worker's by its own id and any other by its workstream's key
     # (the one open in the right pane is always read). ISO times compare as strings.
@@ -564,7 +576,7 @@ def place(records):
         tok = r["session_id"] if r.get("kind") == "worker" else key
         return tok != sn.get("open") and (tok not in at or (r.get("last_turn_at") or "") > at[tok])
     # The pid check decides live; the listing is read only for a record already live by it.
-    live = [r for r in records if r.get("kind") not in SOLO and r["state"] != "ended" and alive(r.get("pid"))]
+    live = [r for r in records if r.get("kind") != "control" and r["state"] != "ended" and alive(r.get("pid"))]
     def reason(r):
         # A reply is Ian's turn only once no sub-agent of it runs: until then the session waits on that.
         if r["state"] == "waiting" and not (r.get("waiting_for") == "replied" and running(r)): return r.get("waiting_for") or "input"
@@ -589,7 +601,7 @@ def place(records):
         return f"idle · {h}h" + (" · cold" if cold else ""), ("34" if cold else "0"), f"{h}h" + (" cold" if cold and not reset else ""), reset   # on the tree the ↻ says cold
     by_ws = {}
     for r in live: by_ws.setdefault(r.get("workstream") or r["name"], []).append(r)
-    placed, stale = {g: [] for g in GROUPS}, []   # group -> [(home group, workstream key, note, lines)]
+    placed, stale = {g: [] for g in [*projs, *GROUPS]}, []   # group -> [(home group, or "manager" for a project's own, workstream key, note, lines)]
     for key in sorted(set(chart) | set(by_ws)):
         fm, body = chart.get(key, ("", ""))
         gl = goals(fm); left = left_of(gl)   # live or dormant
@@ -638,35 +650,38 @@ def place(records):
         # Nothing live. A block, a turn inside STALE_DAYS or a charter created inside it keeps the row; absent or unparseable reads old.
         cr = re.search(r"^created:\s*(\S+)", fm, re.M)
         created_days = days_since(cr.group(1)) if cr else None
-        if key not in pins and not block and (since is None or since > STALE_DAYS * 24) and (created_days is None or created_days > STALE_DAYS):
+        if key not in projs and not block and (since is None or since > STALE_DAYS * 24) and (created_days is None or created_days > STALE_DAYS):
             stale.append(key); continue
         land("Blocked" if block else "Done" if left == "all done" else "Idle", key, note, [dormant()])
-    ctl = [(r, *status(r["kind"], r)[:3]) for r in sorted((r for r in records if r.get("kind") in SOLO and r["state"] != "ended" and alive(r.get("pid"))), key=lambda r: (r["kind"], r["session_id"]))]
-    return ctl, placed, stale   # ctl: [(record, wide state, colour, tree label)], control's first, then the dispatcher's
+    ctl = [(r, *status("control", r)[:3]) for r in sorted((r for r in records if r.get("kind") == "control" and r["state"] != "ended" and alive(r.get("pid"))), key=lambda r: r["session_id"])]
+    return ctl, placed, stale   # ctl: [(record, wide state, colour, tree label)]
 
 nested = lambda wk: wk and wk["nested"]   # the last field of a place() line: a worker drawn under its workstream's row
+order = lambda t: (t[0] != "manager", GROUPS.index(t[0]) if t[0] in GROUPS else 0, t[1])   # a project's manager, then its members by home group, then key
 
 def render(records, color=False):
     """The board, wide: one row per session with its focus, last message and children."""
     C = (lambda code, s: f"\033[{code}m{s}\033[0m") if color else (lambda code, s: s)
     ctl, placed, stale = place(records)
     nt = notes(); noted = lambda key, first: [f"note: {oneline(nt[key])}"] if first and nt.get(key) else []   # once a key, under its first row
-    kw = max([len(k) for g in placed.values() for _, k, _, _ in g] + [len(r["kind"]) for r, *_ in ctl] or [0])
+    kw = max([len(k) for g in placed.values() for _, k, _, _ in g] + [len("control")] * bool(ctl) or [0])
     sw = max([len(s) for g in placed.values() for *_, ls in g for _, s, *_ in ls] or [0])
     out = ["# Workstream board (local inputs only; run /workstreams:board --deep for GitHub PRs and Jira)"]
     if ctl: out.append(C("1", "Control"))
     for r, state, code, _ in ctl:   # listed so every live session is accounted for; it belongs to no workstream
-        if r["kind"] == "dispatcher" and code not in ("31", "33"): state = lease(records, wide=True)   # an ask or an unread reply says itself, as control's
-        out.append(f"  {C('36', r['kind'].ljust(kw))}  {r['session_id'][:8]}  {C(code, state)}")
-    for g in GROUPS:
+        out.append(f"  {C('36', 'control'.ljust(kw))}  {r['session_id'][:8]}  {C(code, state)}")
+    chart = charters()
+    for g in placed:
         if not placed[g]: continue
-        out.append(C("1", g))
-        for _, key, note, lines in sorted(placed[g], key=lambda t: t[1]):
+        out.append(C("1", g if g in GROUPS else " · ".join(filter(None, [f"Project {g}", f"{len(members(g, chart))} workstreams", ", ".join(repos(chart[g][0]))]))))
+        for home, key, note, lines in sorted(placed[g], key=order):
             if g == "Snoozed": out.append(C("2", f"  {key} · {note}")); continue
             for i, (sid, state, code, extra, *rest) in enumerate(lines):
                 if nested(wk := rest[-1]):   # a worker, under its workstream's row and labelled with its name
                     out.append(f"    {C('36', wk['name'])}  {sid.ljust(8)}  {C(code, state.ljust(sw))}  {wk['where'] or ''}".rstrip())
-                else: out.append(f"  {C('36', key.ljust(kw))}  {sid.ljust(8)}  {C(code, state.ljust(sw))}  {note}".rstrip())
+                else:   # a live manager's state is its lease, unless an ask or an unread reply says itself
+                    if home == "manager" and sid != "–" and code not in ("31", "33"): state = lease(records, key, wide=True)
+                    out.append(f"  {C('36', ('manager' if home == 'manager' else key).ljust(kw))}  {sid.ljust(8)}  {C(code, state.ljust(sw))}  {note}".rstrip())
                 out += [C("2", f"      {e}") for e in noted(key, i == 0) + extra]
     if stale:
         out.append(C("2", f"stale ({len(stale)}, no session in {STALE_DAYS}d): " + ", ".join(sorted(stale))))
@@ -681,9 +696,9 @@ def pane_width(width=None):
 
 def tree(records, color=False, width=None, hits=None, current=None, height=None):
     """The same board as render(), narrow: a file-tree sidebar for a tmux pane. Width is read per call, so a resize lands on the next redraw.
-    `hits` gathers line number -> {key, session_id, glyph} for every clickable row: control and the dispatcher, sessions, and idle, blocked and done workstreams,
-    and a worker's own row under its workstream's, which adds worker, its name,
-    and line number -> {key, goal} for each row of a goal in the open workstream's panel and {key, pin, snooze_x} for its key row; nothing else.
+    `hits` gathers line number -> {key, session_id, glyph} for every clickable row: control, sessions, and idle, blocked and done workstreams,
+    and a worker's own row under its workstream's, which adds worker, its name, and a project manager's row, which adds manager,
+    and line number -> {key, goal} for each row of a goal in the open workstream's panel and {key, snooze_x} for its key row; nothing else.
     A row whose glyph is ↻ adds reset_x, the glyph's column. `current` is open_key(), resolved by the caller: its rows carry the bar,
     and its charter, or its workstream's when it is a worker, fills the rows left under the footer. Height, like width, is read per call."""
     hits = {} if hits is None else hits
@@ -703,12 +718,10 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
     def noted(key, trunk):   # Ian's note, dim, on the row's trunk; display only, so never in `hits`
         lead = f"  {trunk} ✎ "; return [C("2", lead + oneline(nt[key], W - len(lead)))] if nt.get(key) else []
     out = [C("1", "WORKSTREAMS"), C("1", "▾ Control")]
-    for kind, glyph in (("control", "◆"), ("dispatcher", "◇")):
-        for r, _, code, st in [c for c in ctl if c[0]["kind"] == kind] or [(None, None, "2", "click to open")]:   # always a row: with none live, a click dispatches one
-            if r and kind == "dispatcher" and code not in ("31", "33"): st = lease(records)
-            hits[len(out)] = {"key": kind, "session_id": r and r["session_id"], "glyph": glyph} | need(code)
-            out.append(row("  ", glyph, kind, st, tone(code), "36", cap=W - 5 - len(kind), on=current == kind))   # 5: lead, glyph, the gaps
-    for g in GROUPS:
+    for r, _, code, st in ctl or [(None, None, "2", "click to open")]:   # always a row: with no live control, a click dispatches one
+        hits[len(out)] = {"key": "control", "session_id": r and r["session_id"], "glyph": "◆"} | need(code)
+        out.append(row("  ", "◆", "control", st, tone(code), "36", cap=W - 12, on=current == "control"))   # 12: lead, glyph, "control", gap
+    for g in placed:
         if not placed[g]: continue
         out.append(C("1", f"▾ {g}"))
         if g == "Snoozed":   # one dim line a workstream; a click opens its first head row's session, and with no need Option+n passes over it
@@ -718,17 +731,19 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
             continue
         # A worker nests under its workstream's first head row (a [duplicate] key's first session), after that row's sub-agents.
         sessions = []
-        for home, key, note, ls in sorted(placed[g], key=lambda t: t[1]):
+        for home, key, note, ls in sorted(placed[g], key=order):
             heads = [l for l in ls if not nested(l[-1])]
             sessions += [(key, note.startswith("[duplicate]"), l, home, [w for w in ls if nested(w[-1])] if n == 0 else []) for n, l in enumerate(heads)]
         for i, (key, dup, (tag, _, code, _, short, kids, guess, sid, reset, wk), home, workers) in enumerate(sessions):
+            # A project's manager row clicks as control's and shows its lease, unless an ask or an unread reply says itself.
+            if mgr := home == "manager": reset = False; short = short if code in ("31", "33") else "click to open" if tag == "–" else lease(records, key)
             # A stale row's status is that it is stale, so its glyph is the reset button. A dormant row (tag "–", nothing live, a retired session or none) is ◌; a live one keeps ○.
-            glyph = "↻" if reset else "⏸" if home == "Blocked" else {"31": "●", "33": "●", "32": "▶"}.get(code, "◌" if tag == "–" else "○")
-            hits[len(out)] = {"key": key, "session_id": sid, "glyph": glyph} | ({"worker": wk["name"]} if wk else {}) | ({"reset_x": 2} if reset else {}) | need(code)   # reset_x: the column after the two-column lead
+            glyph = "◇" if mgr else "↻" if reset else "⏸" if home == "Blocked" else {"31": "●", "33": "●", "32": "▶"}.get(code, "◌" if tag == "–" else "○")
+            hits[len(out)] = {"key": key, "session_id": sid, "glyph": glyph} | ({"worker": wk["name"]} if wk else {}) | ({"reset_x": 2} if reset else {}) | ({"manager": True} if mgr else {}) | need(code)   # reset_x: the column after the two-column lead
             if home == "Blocked":   # a block's label may take half the row, and what it waits on gives way before its age
                 what, tail = re.fullmatch(r"(.*?)((?: · \d+[mhd])?)", short).groups(); short = oneline(what, W // 2 - len(tail)) + tail
             # ponytail: the title names a key, not a session, so every row of a [duplicate] key carries the bar
-            out.append(row("  ", glyph, key, short, tone(code), "36", dup, cap=W // 2 if home == "Blocked" else None, on=(sid if wk else key) == current))
+            out.append(row("  ", glyph, "manager" if mgr else key, short, tone(code), "36", dup, cap=W // 2 if home == "Blocked" else W - 12 if mgr else None, on=(sid if wk else key) == current))
             trunk = "│" if i < len(sessions) - 1 else " "   # the group's trunk runs on while sessions follow
             if i == 0 or sessions[i - 1][0] != key: out += noted(key, trunk)   # a [duplicate] key's rows run together: its note shows once
             if guess: out.append(row(f"  {trunk} ", "→", f"{guess}?", "", "2"))
@@ -755,7 +770,7 @@ def details(key, W, room, C):
     then what it is blocked on and Ian's note, its purpose, and its open goals at two rows apiece, a blank row around the key and between
     the rest, the last row cut with … when they run past. Nothing for a key with no charter, such as control or an unassigned session, or
     with no room for a row under the key. Returns [(row, goal)]: goal is the text of the goal a row shows, which a click on it sends, or for the key row
-    {pin, snooze_x}: a click on its ☾, columns snooze_x, snoozes or unsnoozes, and anywhere else pins or unpins."""
+    {snooze_x}: a click on its ☾, columns snooze_x, snoozes or unsnoozes."""
     found = key and charters(skip=()).get(key)
     if not found or room < 5: return []
     fm = found[0]; gl = goals(fm); left = left_of(gl) or "no goals"
@@ -772,18 +787,32 @@ def details(key, W, room, C):
         body = body[:room - 4]
         while not body[-1][1]: body.pop()
         code, last, goal = body[-1]; body[-1] = (code, last + " …" if len(last) <= W - 2 else last[:W - 1] + "…", goal)   # oneline() would drop the indent
-    mark = ("★ " if scalar(fm, "pinned") == "true" else "☆ ") + SNOOZE + (f" {remaining(s)} " if (s := snoozed(fm)) else " ")
+    mark = SNOOZE + (f" {remaining(s)} " if (s := snoozed(fm)) else " ")
     name = mark + oneline(key, W - len(left) - 1 - len(mark))
-    head = [(C("2", "═" * W), None), ("", None), (C("1;36", name) + " " * (W - len(name) - len(left)) + C("2", left), {"pin": True, "snooze_x": [2, len(mark) - 1]}), ("", None)]
+    head = [(C("2", "═" * W), None), ("", None), (C("1;36", name) + " " * (W - len(name) - len(left)) + C("2", left), {"snooze_x": [0, len(mark) - 1]}), ("", None)]
     return head + [(C(code, l), goal) for code, l, goal in body]
 
+def limits():
+    """{"five_hour" | "seven_day": (percent, resets_at)} from what ~/.claude/quota-tap.sh saved from a status line, with "age", the reading's
+    seconds; {} without one, and a window it cannot read left out."""
+    p = Path.home() / ".claude" / "rate-limits.json"
+    try: d = json.loads(p.read_text()); out = {"age": time.time() - p.stat().st_mtime}
+    except (OSError, ValueError): return {}
+    for w in ("five_hour", "seven_day"):
+        try: out[w] = (round(float(d[w]["used_percentage"])), int(d[w]["resets_at"]))
+        except (KeyError, TypeError, ValueError): pass
+    return out
+
+def quota_line(q):
+    """`5h N% resets HH:MM · 7d N%` for limits() `q` with a 5h reading, or None."""
+    return "five_hour" in q and f"5h {q['five_hour'][0]}% resets {time.strftime('%H:%M', time.localtime(q['five_hour'][1]))}" + \
+        (f" · 7d {q['seven_day'][0]}%" if "seven_day" in q else "") or None
+
 def quota(W):
-    """The sidebar's footer: (colour, line) for the 5h quota ~/.claude/quota-tap.sh saved from a status line, or None without one.
+    """The sidebar's footer: (colour, line) for the saved 5h quota, limits(), or None without one.
     Dim once the window it describes has reset; colours match the status line's (green, yellow from 70%, red from 90%)."""
-    try:
-        five = json.loads((Path.home() / ".claude" / "rate-limits.json").read_text())["five_hour"]
-        pct, resets = round(float(five["used_percentage"])), int(five["resets_at"])
-    except (OSError, ValueError, KeyError, TypeError): return None
+    if "five_hour" not in (q := limits()): return None
+    pct, resets = q["five_hour"]
     bar = "█" * (min(pct, 100) // 10) + "░" * (10 - min(pct, 100) // 10)
     left, at = f"5h {bar} {pct}%", time.strftime("%-I:%M%p", time.localtime(resets)).lower()
     right = f"resets {at}" if len(left) + len(at) + 8 <= W else at
@@ -799,14 +828,14 @@ RESUME = ("Start by restating this workstream from your injected charter: its pu
           "Then read the handoff and tell me where things stand and what needs deciding.")
 
 CONTROL = ["--model", "opus", "--effort", "high", "--permission-mode", "auto", "/workstreams:board"]   # control's own flags, never the user's defaults
-DISPATCHER = ["--model", "sonnet", "--permission-mode", "auto", "/workstreams:dispatch"]
+MANAGER = ["--model", "sonnet", "--permission-mode", "auto", "/workstreams:project"]
 
 def decide(entry, reg, rec=None, x=None, rows=dict):
     """What a click on a tree row does, given its tree-rows.json entry, its live session's registry (None if not live), its board record,
     the click's column (None opens) and a reader of the agents listing, called only for a session that is not live.
     ("attach", job) | ("restart", job) | ("dispatch", key) | ("message", text) | None for an unmapped line."""
     if not entry: return None
-    control, sid = entry["key"] in SOLO, entry.get("session_id")   # the dispatcher's row clicks as control's
+    control, sid = entry["key"] == "control" or "manager" in entry, entry.get("session_id")   # a project manager's row clicks as control's
     live = bool(sid and reg and reg.get("sessionId") == sid)   # a reused pid names another session
     reset = x is not None and "reset_x" in entry and entry["reset_x"] <= x <= entry["reset_x"] + 1   # the ↻ and the space after it
     if not sid or (control or reset) and not live: return ("dispatch", entry["key"])   # control holds no state: an ended one is simply replaced
@@ -821,11 +850,11 @@ def decide(entry, reg, rec=None, x=None, rows=dict):
     return ("attach", job)   # a live session is opened as it stands: a click on its row never types into it
 
 def tree_rows(goals=False):
-    """board/tree-rows.json: {line: entry} as the watch last drew the sidebar, or {} without one. Only a click acts on a goal's or a pin's entry,
+    """board/tree-rows.json: {line: entry} as the watch last drew the sidebar, or {} without one. Only a click acts on a goal's or the key row's entry,
     so the rest, the steps and the menu, see the rows alone unless `goals`."""
     try: hits = json.loads((board_dir() / "tree-rows.json").read_text())
     except (OSError, ValueError): return {}
-    return hits if goals else {n: e for n, e in hits.items() if "goal" not in e and "pin" not in e}
+    return hits if goals else {n: e for n, e in hits.items() if "goal" not in e and "snooze_x" not in e}
 
 def judge(entry, x=None, rows=listing):
     """decide() for a tree-rows.json entry, with its board record and live registry read here: what a click on its row would do."""
@@ -837,9 +866,8 @@ def open_row(line, target, x=None, client=None):
     """`board.py open <line> <pane> [<x> [<client>]]`: the sidebar's click, run by tmux, x its column and client where a menu it opens shows."""
     entry = tree_rows(goals=True).get(str(line))
     if entry and "goal" in entry: return focus(entry, target)
-    if entry and "pin" in entry:
-        lo, hi = entry.get("snooze_x") or (0, -1)
-        if x is None or not lo <= x <= hi: return pin(entry["key"])
+    if entry and "snooze_x" in entry:
+        if x is None or not entry["snooze_x"][0] <= x <= entry["snooze_x"][1]: return
         found = find_charter(entry["key"])   # read at the click: the snooze may have passed since the draw
         return snooze(entry["key"]) if found and snoozed(found[1]) else snooze_menu(entry["key"], client)
     perform(entry, judge(entry, x), target)
@@ -872,23 +900,38 @@ def asks(key):
     if isinstance(records, str): return True
     return any(code == "31" for g in place(records)[1].values() for _, k, _, ls in g if k == key for _, _, code, *_ in ls)
 
+def relaunch(key, act):
+    """A restart or a dispatch of `key`'s session: ("attach", the new id) or ("message", why not)."""
+    import subprocess
+    # A double-click is two clicks about a second apart, and `claude --bg` can return inside that second: the key stays
+    # claimed for DISPATCH_HOLD after a dispatch, so the second click cannot start a second session.
+    lock = board_dir() / f".dispatch-{re.sub(r'[^A-Za-z0-9_-]', '-', key)}"
+    try: os.close(os.open(lock, os.O_CREAT | os.O_EXCL))
+    except FileExistsError:
+        if time.time() - lock.stat().st_mtime < DISPATCH_HOLD: return ("message", f"{key}: already starting")
+    if act[0] == "restart":
+        subprocess.run(["claude", "stop", act[1]], capture_output=True, timeout=60); act = ("dispatch", key)
+    args = CONTROL if key == "control" else MANAGER if key in projects() else ["--permission-mode", "auto", RESUME]
+    wid, why = launch(key, args, 120)
+    lock.touch() if wid else lock.unlink(missing_ok=True)   # the hold runs from the dispatch's end; a failed one frees the key for a retry
+    return ("attach", wid) if wid else ("message", f"{key}: {why or 'dispatch printed nothing'}")
+
+def restart(key):
+    """`board.py restart <KEY>`, the project manager's: (ok, report). key's live active session stopped and a fresh one started from its
+    charter, as a click on its ↻ does; refused while that session is working or asking Ian."""
+    records = load_records(); records = [] if isinstance(records, str) else records
+    r = max((r for r in records if r.get("workstream") == key and r.get("kind") == "active" and r["state"] != "ended" and alive(r.get("pid"))),
+            key=lambda r: r.get("started_at") or "", default=None)
+    act = r and judge({"key": key, "session_id": r["session_id"], "reset_x": 0}, 0)
+    if not act or act[0] != "restart": return False, f"{key}: " + ("no live session" if not r else "working or asking Ian, not restarted" if act[0] == "attach" else act[1])
+    act = relaunch(key, act)
+    return act[0] == "attach", f"{key}: restarted, id {act[1]}" if act[0] == "attach" else act[1]
+
 def perform(entry, act, target):
     """Does judge()'s `act` for `entry` in pane `target`. Every failure ends in a tmux message or nothing."""
     import subprocess
     tmux = lambda *a: subprocess.run(["tmux", *a], capture_output=True, text=True)
-    if act and act[0] in ("restart", "dispatch"):
-        # A double-click is two clicks about a second apart, and `claude --bg` can return inside that second: the key stays
-        # claimed for DISPATCH_HOLD after a dispatch, so the second click cannot start a second session.
-        lock = board_dir() / f".dispatch-{re.sub(r'[^A-Za-z0-9_-]', '-', entry['key'])}"
-        try: os.close(os.open(lock, os.O_CREAT | os.O_EXCL))
-        except FileExistsError:
-            if time.time() - lock.stat().st_mtime < DISPATCH_HOLD: return tmux("display-message", f"{entry['key']}: already starting")
-        if act[0] == "restart":
-            subprocess.run(["claude", "stop", act[1]], capture_output=True, timeout=60); act = ("dispatch", entry["key"])
-        args = {"control": CONTROL, "dispatcher": DISPATCHER}.get(act[1], ["--permission-mode", "auto", RESUME])
-        wid, why = launch(act[1], args, 120)
-        act = ("attach", wid) if wid else ("message", f"{act[1]}: {why or 'dispatch printed nothing'}")
-        lock.touch() if wid else lock.unlink(missing_ok=True)   # the hold runs from the dispatch's end; a failed one frees the key for a retry
+    if act and act[0] in ("restart", "dispatch"): act = relaunch(entry["key"], act)
     if act and act[0] == "attach":
         tmux("respawn-pane", "-k", "-t", target, f"claude attach {act[1]}")
         title = entry.get("worker", entry["key"])
@@ -951,38 +994,31 @@ def save_note(key, target):
     session writes its charter only through the tool, which never touches note:."""
     import subprocess
     p = subprocess.run(["tmux", "-u", "show", "-pv", "-t", target, "@ws_note"], capture_output=True, encoding="utf-8")   # -u: a C locale reads é as _
-    if p.returncode or not (found := find_charter(key)): return
-    reply = p.stdout.strip()
-    with locked(found[0]):
-        if not (m := FRONT.match(text := found[0].read_text())): return
-        lines = m.group(1).split("\n"); put(lines, "note", f'note: "{esc(reply)}"' if reply else None, "focus")
-        new = text[:m.start(1)] + "\n".join(lines) + text[m.end(1):]
-        if new != text: atomic_write(found[0], new)   # unchanged, it keeps its mtime
+    if not p.returncode: set_line(key, "note", f'note: "{esc(r)}"' if (r := p.stdout.strip()) else None)
 
-def pin(key, on=None):
-    """`board.py pin|unpin <key>`, and a click on the panel's ☆/★ (on=None toggles): the pinned: line of key's charter, after focus: when it is
-    new, removed when off. Only that line changes, read and written under the lock as save_note() does note:. The report, or None without a charter."""
-    if not (found := find_charter(key)): return None
+def set_line(key, name, line):
+    """The `name:` line of key's charter set to `line`, after focus: when it is new, or removed with None; False without a charter. Only that
+    line changes, read and written under the lock, and the session's tool never writes it."""
+    if not (found := find_charter(key)): return False
     with locked(found[0]):
-        if not (m := FRONT.match(text := found[0].read_text())): return None
-        lines = m.group(1).split("\n"); on = scalar(m.group(1), "pinned") != "true" if on is None else on
-        put(lines, "pinned", "pinned: true" if on else None, "focus")
-        if on: put(lines, "snoozed_until", None)   # a pin and a snooze are never both on
+        if not (m := FRONT.match(text := found[0].read_text())): return False
+        lines = m.group(1).split("\n"); put(lines, name, line, "focus")
         new = text[:m.start(1)] + "\n".join(lines) + text[m.end(1):]
         if new != text: atomic_write(found[0], new)   # unchanged, it keeps its mtime
-    return f"{key} {'pinned' if on else 'unpinned'}"
+    return True
+
+def join(ws, p=None):
+    """`board.py join <WS> <PROJECT>` and `board.py leave <WS>` (p=None): WS's project: line, the one place membership is kept. (ok, report)."""
+    chart = charters(skip=())
+    if ws not in chart: return False, f"no charter for {ws}"
+    if p is not None and p not in projects(chart): return False, f"{p} is not a project"
+    set_line(ws, "project", p and f"project: {p}")
+    return True, f"{ws} joined {p}" if p else f"{ws} left its project"
 
 def snooze(key, until=None):
     """`board.py snooze <key> <length>|unsnooze <key>`, an item of snooze_menu(), and an ask, which unsnoozes (until=None): the snoozed_until: line
-    of key's charter, a UTC ISO time, after focus: when it is new, removed when off. A snooze also removes pinned:. Written under the lock as pin()
-    writes. The report, or None without a charter."""
-    if not (found := find_charter(key)): return None
-    with locked(found[0]):
-        if not (m := FRONT.match(text := found[0].read_text())): return None
-        lines = m.group(1).split("\n"); put(lines, "snoozed_until", until and f"snoozed_until: {until}", "focus")
-        if until: put(lines, "pinned", None)
-        new = text[:m.start(1)] + "\n".join(lines) + text[m.end(1):]
-        if new != text: atomic_write(found[0], new)   # unchanged, it keeps its mtime
+    of key's charter, a UTC ISO time, written by set_line(). The report, or None without a charter."""
+    if not set_line(key, "snoozed_until", until and f"snoozed_until: {until}"): return None
     return f"{key} snoozed until {time.strftime('%a %H:%M', time.localtime(round(time.time() - seconds_since(until))))}" if until else f"{key} unsnoozed"
 
 def until_of(length):
@@ -1001,37 +1037,36 @@ def snooze_menu(key, client=None):
     items = [a for i, (name, arg) in enumerate((("1h", "1h"), ("3h", "3h"), ("1d", morning))) for a in (name, str(i + 1), run(arg))]
     subprocess.run(["tmux", "display-menu", "-M", *(["-c", client] if client else []), "-T", f"snooze {key}".replace("#", "##"), *items], capture_output=True)
 
-ENGAGED_MINUTES = 20   # the dispatcher acts only while Ian's newest typed prompt, in any session, is younger than this
-IDLE_MINUTES = 5   # a manager or worker settled this long is one the dispatcher may nudge onto its next step
+ENGAGED_MINUTES = 20   # a project manager acts only while Ian's newest typed prompt, in any session, is younger than this
+IDLE_MINUTES = 5   # a manager or worker settled this long is one its project manager may nudge onto its next step
 WINDOW, BANDS = 1_000_000, (50, 70, 85)   # a session's context window, and the percentages of it whose crossing the watch says
+QUOTA = (70, 90)   # the 5h quota percentages whose crossing upward the watch says, once a window
 POLL, PR_POLL = 10, 20   # seconds between looks at the sessions, and at the PRs
 REF = re.compile(r"(?:github\.com/)?([\w.-]+)/([\w.-]+)(?:/pull/|#)(\d+)")   # a PR's URL, or owner/repo#n
 
 def engaged(records):
-    """(whether Ian is engaged, seconds since his newest typed prompt in any session, or None for none): the dispatcher's lease."""
+    """(whether Ian is engaged, seconds since his newest typed prompt in any session, or None for none): the project managers' lease."""
     s = seconds_since(max((r["prompted_at"] for r in records if r.get("prompted_at")), default=None))
     return s is not None and s < ENGAGED_MINUTES * 60, s
 
-def dstate(change=None):
-    """board/dispatcher.json: {snapshot: the watch's last look, prs: refs Ian named to watch, needs: the dispatcher's Needs-Ian list}.
-    `change` maps it to the keys to write over it, under the lock: the watch and the dispatcher's commands each write their own."""
-    p = board_dir() / "dispatcher.json"
+def dstate(p, change=None):
+    """board/project-<p>.json, project p's manager's state: {snapshot: the watch's last look, prs: refs named to watch, needs: its Needs-Ian list}.
+    `change` maps it to the keys to write over it, under the lock: the watch and the manager's commands each write their own."""
+    p = board_dir() / f"project-{re.sub(r'[^A-Za-z0-9_-]', '-', p)}.json"
     with locked(p):
         try: d = json.loads(p.read_text())
         except (OSError, ValueError): d = {}
         if change: d |= change(d); atomic_write(p, json.dumps(d))
     return d
 
-def lease(records, wide=False):
-    """The dispatcher row's state: watching, with the count its session last wrote, while Ian is engaged; else paused, since when."""
-    on, s = engaged(records); d = dstate(); n = len(d.get("needs") or []); snap = d.get("snapshot") or {}
+def lease(records, p, wide=False):
+    """Project p's manager row's state: watching, with the count its session last wrote, while Ian is engaged; else paused, since when."""
+    on, s = engaged(records); d = dstate(p); n = len(d.get("needs") or []); snap = d.get("snapshot") or {}
     if not wide: return "watching" + f" · {n} need you" * bool(n) if on else f"paused · away {ago(s)}" if s is not None else "paused"
     if on: return (f"watching {len(snap.get('sessions') or {})} sessions, {len(snap.get('prs') or {})} PRs" + f" · {n} need Ian" * bool(n)
                    + f" · engaged {remaining(ENGAGED_MINUTES * 60 - s)} more")
     at = f" {time.strftime('%H:%M', time.localtime(time.time() - s + ENGAGED_MINUTES * 60))}, no prompt from Ian for {ago(s)}" if s is not None else ", no prompt from Ian yet"
     return f"paused{at} · watches stopped"
-
-pinned = lambda: {k: fm for k, (fm, _) in charters(skip=()).items() if scalar(fm, "pinned") == "true"}
 
 def context(sid):
     """Tokens in a session's context at its last main-thread reply, read from its transcript's last megabyte, or None."""
@@ -1046,11 +1081,11 @@ def context(sid):
         if u and r.get("type") == "assistant" and not r.get("isSidechain"):
             return u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
 
-def sessions(records):
-    """{id8: what the watch compares} for each live manager and worker of a pinned workstream."""
-    out, pins = {}, pinned()
+def sessions(records, p):
+    """{id8: what the watch compares} for each live manager and worker of a workstream of project p."""
+    out, mine = {}, members(p)
     for r in records:
-        if r.get("kind") not in ("active", "worker") or r.get("workstream") not in pins or r["state"] == "ended" or not alive(r.get("pid")): continue
+        if r.get("kind") not in ("active", "worker") or r.get("workstream") not in mine or r["state"] == "ended" or not alive(r.get("pid")): continue
         ctx = context(r["session_id"])
         out[r["session_id"][:8]] = {"ws": r["workstream"], "kind": r["kind"], "name": r["name"], "ctx": ctx, "band": max([b for b in BANDS if 100 * (ctx or 0) >= b * WINDOW], default=0),
                                     "state": r["state"], "why": r["waiting_for"], "turn": r.get("last_turn_at"), "msg": oneline(r.get("last_message") or "", 180),
@@ -1071,11 +1106,12 @@ def changes(old, new):
             s["idled"] = s["turn"]; yield f"IDLE {who(s, sid)} {m}m: {s['msg']}"
         if s["band"] > o.get("band", 0): yield f"CONTEXT {who(s, sid)} at {round(100 * s['ctx'] / WINDOW)}% ({s['ctx'] // 1000}k of {WINDOW // 1000}k)"
         yield from (f"{who(s, sid)} sub-agent {name} {k} finished" for k, name in o.get("kids", {}).items() if k not in s["kids"])   # the record drops a finished one
-    yield from (f"GONE {who(o, sid)} (ended or unpinned)" for sid, o in old.items() if sid not in new)
+    yield from (f"GONE {who(o, sid)} (ended or left the project)" for sid, o in old.items() if sid not in new)
 
-def refs():
-    """owner/repo#n for each PR a pinned charter's blocked: line names, and each Ian named to the dispatcher."""
-    return sorted({f"{o}/{r}#{n}" for o, r, n in REF.findall(" ".join([scalar(fm, "blocked") or "" for fm in pinned().values()] + (dstate().get("prs") or [])))})
+def refs(p):
+    """owner/repo#n for each PR the blocked: line of project p's charter or a member's names, and each named to its manager."""
+    chart = charters()
+    return sorted({f"{o}/{r}#{n}" for o, r, n in REF.findall(" ".join([scalar(chart[k][0], "blocked") or "" for k in [p, *members(p, chart)] if k in chart] + (dstate(p).get("prs") or [])))})
 
 def pulls(want):
     """{ref: [state, head7, reviewDecision, mergeStateStatus]} for `want`, from one `gh api graphql` query; a ref it cannot read is left out."""
@@ -1088,9 +1124,9 @@ def pulls(want):
     return {ref: [p["state"], p["headRefOid"][:7], p.get("reviewDecision") or "", p.get("mergeStateStatus") or ""]
             for i, ref in enumerate(want) if (p := (data.get(f"p{i}") or {}).get("pullRequest"))}
 
-def pr_changes(old, new, after):
+def pr_changes(old, new, after, rs):
     """Lines for what changed between two looks at the PRs. `after`, {ref: the sibling that merged}, is carried between looks and changed here:
-    a merge marks each open PR of its repo, and the next look says a marked PR's DIRTY or BEHIND as caused by it, changed or not."""
+    a merge in a repo of `rs`, the project's repos:, marks each open PR of that repo, and the next look says a marked PR's DIRTY or BEHIND as caused by it, changed or not."""
     said = set()
     for ref, m in list(after.items()):
         if ref not in new: continue
@@ -1100,36 +1136,45 @@ def pr_changes(old, new, after):
         if (o := old.get(ref)) is None: continue
         if st != o[0]:
             yield f"PR {ref} → {st}"
-            if st == "MERGED": after |= {r: ref for r, v in new.items() if r != ref and r.split("#")[0] == ref.split("#")[0] and v[0] == "OPEN"}
+            if st == "MERGED" and ref.split("#")[0] in rs: after |= {r: ref for r, v in new.items() if r != ref and r.split("#")[0] == ref.split("#")[0] and v[0] == "OPEN"}
         elif head != o[1]: yield f"PR {ref} new head {head}"
         elif rd != o[2]: yield f"PR {ref} review → {rd or 'none'}"
         if ms != o[3] and ref not in said and ms in ("DIRTY", "BEHIND", "BLOCKED", "UNSTABLE", "CLEAN"): yield f"PR {ref} merge state → {ms}"
 
-def watch():
-    """`board.py watch`, run by the dispatcher under its Monitor tool: one line per change in a pinned workstream's live sessions and the PRs
-    its work waits on, until Ian has typed no prompt for ENGAGED_MINUTES. A re-armed watch first says what changed since the saved look."""
+def watch(p):
+    """`board.py watch <PROJECT>`, run by p's manager under its Monitor tool: one line per change in its members' live sessions and the PRs
+    their work waits on, and a QUOTA line, until Ian has typed no prompt for ENGAGED_MINUTES. A re-armed watch first says what changed since the saved look."""
     import itertools
     say = lambda line: print(line, flush=True)
-    last = dstate().get("snapshot"); old = last or {"sessions": {}, "prs": {}, "after": {}}
+    last = dstate(p).get("snapshot"); old = last or {"sessions": {}, "prs": {}, "after": {}}
     for tick in itertools.count():
         if not isinstance(records := load_records(), str):
             on, s = engaged(records)
             if not on: return say("PAUSED: no prompt from Ian " + (f"since {time.strftime('%H:%M', time.localtime(time.time() - s))}" if s is not None else "yet"))
-            new = {"sessions": sessions(records), "prs": old["prs"], "after": dict(old["after"])}
+            new = {"sessions": sessions(records, p), "prs": old["prs"], "after": dict(old["after"]), "quota": old.get("quota", [None, 0])}
             lines = list(changes(old["sessions"], new["sessions"]))
+            if "five_hour" in (q := limits()):   # quota: [the window's reset, the highest of QUOTA said in it]
+                pct, at = q["five_hour"]; said = new["quota"][1] if new["quota"][0] == at else 0
+                if (band := max([b for b in QUOTA if pct >= b], default=0)) > said: lines.append(f"QUOTA {quota_line(q)}")
+                new["quota"] = [at, max(band, said)]
             if tick % (PR_POLL // POLL) == 0:
-                want = refs(); got = pulls(want)
-                lines += pr_changes(old["prs"], got, new["after"]); new["prs"] = {r: v for r, v in (old["prs"] | got).items() if r in want}
-            if tick == 0: lines = lines * (last is not None) + [f"armed: {len(new['sessions'])} live sessions across pinned workstreams, {len(new['prs'])} PRs"]
+                want = refs(p); got = pulls(want)
+                lines += pr_changes(old["prs"], got, new["after"], repos(projects()[p])); new["prs"] = {r: v for r, v in (old["prs"] | got).items() if r in want}
+            if tick == 0: lines = lines * (last is not None) + [f"armed: {len(new['sessions'])} live sessions across {p}'s workstreams, {len(new['prs'])} PRs"]
             for line in lines: say(line)
-            if new != old: dstate(lambda d: {"snapshot": new})
+            if new != old: dstate(p, lambda d: {"snapshot": new})
             old = new
         time.sleep(POLL)
 
 def main():
-    if sys.argv[1:2] == ["watch"]: watch(); return
-    if sys.argv[1:2] == ["needs"]: dstate(lambda d: {"needs": json.load(sys.stdin)}); return
-    if sys.argv[1:2] == ["pr"]: dstate(lambda d: {"prs": sorted(set(d.get("prs") or []) | set(sys.argv[2:]))}); return
+    if sys.argv[1:2] in (["watch"], ["needs"], ["pr"]) and (sys.argv[2:3] or [None])[0] not in projects():
+        print(f"give a project's key: {', '.join(projects()) or 'no charter has kind: project'}"); sys.exit(1)
+    if sys.argv[1:2] == ["watch"]: watch(sys.argv[2]); return
+    if sys.argv[1:2] == ["needs"]: dstate(sys.argv[2], lambda d: {"needs": json.load(sys.stdin)}); return
+    if sys.argv[1:2] == ["pr"]: dstate(sys.argv[2], lambda d: {"prs": sorted(set(d.get("prs") or []) | set(sys.argv[3:]))}); return
+    if sys.argv[1:2] == ["quota"]: q = limits(); print(quota_line(q) and f"{quota_line(q)} · read {ago(q['age'])} ago" or "no quota reading"); return
+    if sys.argv[1:2] in (["join"], ["leave"], ["restart"]):
+        ok, said = restart(sys.argv[2]) if sys.argv[1] == "restart" else join(*sys.argv[2:4 if sys.argv[1] == "join" else 3]); print(said); sys.exit(not ok)
     if sys.argv[1:2] == ["charter"]: print(json.dumps(charter(sys.argv[2], "--refresh" in sys.argv[3:]))); return
     if sys.argv[1:2] == ["event"]: event(sys.argv[2], json.load(sys.stdin)); return
     if sys.argv[1:2] == ["write"]: print(json.dumps(write(sys.argv[2], json.load(sys.stdin)))); return
@@ -1143,8 +1188,6 @@ def main():
     if sys.argv[1:2] == ["menu"]: menu(*sys.argv[2:4]); return
     if sys.argv[1:2] == ["note"]: note(*sys.argv[2:4]); return
     if sys.argv[1:2] == ["save-note"]: save_note(*sys.argv[2:4]); return
-    if sys.argv[1:2] in (["pin"], ["unpin"]):
-        said = pin(sys.argv[2], sys.argv[1] == "pin"); print(said or f"no charter for {sys.argv[2]}"); sys.exit(not said)
     if sys.argv[1:2] in (["snooze"], ["unsnooze"]):
         until = sys.argv[1] == "snooze" and until_of(sys.argv[3] if sys.argv[3:] else None)
         if until is None: print("give a length such as 90m, 3h or 1d"); sys.exit(1)
@@ -1167,12 +1210,12 @@ def main():
             print(once()); return
         # Live view for a spare terminal tab: read-only, redraws until Ctrl-C. The clock lives here, never in render().
         born, opened = os.stat(__file__).st_mtime, board_dir() / "open.json"
-        stamp = lambda: [p.exists() and p.stat().st_mtime_ns for p in (opened, ws_dir())]   # the charter directory moves when a pin or a snooze lands
+        stamp = lambda: [p.exists() and p.stat().st_mtime_ns for p in (opened, ws_dir())]   # the charter directory moves when a snooze lands
         try:
             while True:
                 last = stamp()   # taken before the draw, so a click landing mid-draw still wakes the next one
                 print("\033[H\033[2J" + once() + ("" if narrow else f"\n\nupdated {time.strftime('%H:%M:%S')} · Ctrl-C to quit"), flush=True)
-                # Opening a session rewrites open.json, a pin a charter: redraw at once, so the mark follows the click rather than the 3s tick.
+                # Opening a session rewrites open.json, a snooze a charter: redraw at once, so the mark follows the click rather than the 3s tick.
                 for _ in range(30):
                     if stamp() != last: break
                     time.sleep(0.1)
