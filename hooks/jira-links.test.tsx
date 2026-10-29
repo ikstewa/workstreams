@@ -79,31 +79,23 @@ test('a key that is not a project key shape is ignored', { options: { jiraUrl: '
   expect(await textAfter($, on, 'PROJ-1 and x-2')).toBe('[PROJ-1](https://example.atlassian.net/browse/PROJ-1) and x-2')
 })
 
-const REPOS = { options: { githubRepos: ['octo-org/waypoints', 'octo-org/triage-lite', 'me/my.repo'] } }
-const ref = (repo: string, n: number, owner = 'octo-org') => `[${repo} #${n}](https://github.com/${owner}/${repo}/issues/${n})`
 
-test('a listed repo ref links to its issue, which GitHub redirects for a PR', REPOS, async ($, on) => {
-  expect(await textAfter($, on, 'See waypoints #197 and triage-lite #2.')).toBe(`See ${ref('waypoints', 197)} and ${ref('triage-lite', 2)}.`)
+const ref = (repo: string, n: number) => `[${repo}#${n}](https://github.com/${repo}/issues/${n})`
+
+test('an owner/repo ref links to its issue, which GitHub redirects for a PR, with nothing configured', async ($, on) => {
+  expect(await textAfter($, on, 'See octo-org/waypoints#197 and me/my.repo#2.')).toBe(`See ${ref('octo-org/waypoints', 197)} and ${ref('me/my.repo', 2)}.`)
 })
 
-test('a word that is not a listed repo stays as written', REPOS, async ($, on) => {
-  const text = 'issue #193, PR #198, milestone #6, goal #38 and bare #197'
+test('a ref without its owner stays as written', async ($, on) => {
+  const text = 'waypoints#267, waypoints #267, issue #193, PR #198 and bare #197'
   expect(await textAfter($, on, text)).toBe(text)
 })
 
-test('a ref in code, a link, a URL or a longer token is untouched', REPOS, async ($, on) => {
-  const text = '`waypoints #1`, [waypoints #2](https://x.test), https://x.test/waypoints #3x, my-waypoints #4 and waypoints #5a'
+test('a ref in code, a link, a URL, a longer path or a longer token is untouched', async ($, on) => {
+  const text = '`o/r#1`, [o/r#2](https://x.test), https://x.test/o/r#3, a/b/c#4 and o/r#5a'
   expect(await textAfter($, on, text)).toBe(text)
 })
 
-test('a dot in a repo name matches only a dot', REPOS, async ($, on) => {
-  expect(await textAfter($, on, 'my.repo #3 and myXrepo #4')).toBe(`${ref('my.repo', 3, 'me')} and myXrepo #4`)
-})
-
-test('repos given as one string link too, and an entry without an owner is ignored', { options: { githubRepos: 'waypoints, octo-org/triage-lite' } }, async ($, on) => {
-  expect(await textAfter($, on, 'waypoints #1 and triage-lite #2')).toBe(`waypoints #1 and ${ref('triage-lite', 2)}`)
-})
-
-test('Jira keys and repo refs link together', { options: { ...OPTIONS.options, ...REPOS.options } }, async ($, on) => {
-  expect(await textAfter($, on, 'PROJ-8541 via waypoints #197')).toBe(`${LINK} via ${ref('waypoints', 197)}`)
+test('Jira keys and GitHub refs link together', OPTIONS, async ($, on) => {
+  expect(await textAfter($, on, 'PROJ-8541 via octo-org/waypoints#197')).toBe(`${LINK} via ${ref('octo-org/waypoints', 197)}`)
 })
