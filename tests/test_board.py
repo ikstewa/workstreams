@@ -2682,17 +2682,31 @@ class BoardTest(unittest.TestCase):
         self.put("m-live", "SHOP", self.me(), state="waiting", waiting_for="replied", last_turn_at=self.at(1))
         self.assertTrue(mrow().endswith("unread"), mrow()); self.assertEqual(self.hits()[4]["need"], "unread")
 
-    def test_decide_and_open_a_manager_as_control(self):
-        self.project(); decide, now = self.decide(), time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    def test_decide_and_open_a_manager_as_any_row(self):
+        self.project(); decide = self.decide()
         M, reg = {"key": "SHOP", "session_id": "m-full-id", "manager": True}, {"sessionId": "m-full-id", "kind": "bg", "jobId": "m-full-i"}
+        rec = lambda **kw: {"state": "idle", "waiting_for": None, "last_turn_at": self.ago(0)} | kw
+        self.assertEqual(decide(M, reg, rec()), ("attach", "m-full-i"))
+        self.assertEqual(decide(M, None, rec(), rows=lambda: {"m-full-id": {"kind": "background"}}), ("attach", "m-full-i"))   # retired: revived, never replaced
+        self.assertEqual(decide(M, reg, rec(last_turn_at=self.ago(2))), ("attach", "m-full-i"))   # cold: a plain click never restarts it
+        R = M | {"reset_x": 2}
+        self.assertEqual(decide(R, reg, rec(last_turn_at=self.ago(2)), 2), ("restart", "m-full-i"))
+        self.assertEqual(decide(R, reg, rec(state="waiting", waiting_for="permission", last_turn_at=self.ago(2)), 2), ("attach", "m-full-i"))
         self.assertEqual(decide({"key": "SHOP", "session_id": None, "manager": True}, None), ("dispatch", "SHOP"))
-        self.assertEqual(decide(M, None, {"state": "idle"}), ("dispatch", "SHOP"))
-        self.assertEqual(decide(M, reg, {"state": "idle", "waiting_for": None, "last_turn_at": "2020-01-01T00:00:00Z"}), ("restart", "m-full-i"))
-        self.assertEqual(decide(M, reg, {"state": "idle", "waiting_for": None, "last_turn_at": now}), ("attach", "m-full-i"))
         self.board.mkdir(parents=True, exist_ok=True)
         (self.board / "tree-rows.json").write_text(json.dumps({"3": {"key": "SHOP", "session_id": None, "manager": True}}))
         self.open_line(3, self.BG.replace("control", "SHOP"))
         self.assertEqual((Path(self.home) / "claude.log").read_text(), "--bg -n SHOP --model sonnet --permission-mode auto /workstreams:project\n")
+
+    def test_a_stale_manager_row_resets_on_its_arrow(self):
+        self.project(); me = self.me()
+        (Path(self.home) / ".claude" / "sessions" / f"{me}.json").write_text(json.dumps({"pid": me, "sessionId": "m-live-full", "kind": "bg", "jobId": "m-live-f", "status": "idle"}))
+        self.put("m-live-full", "SHOP", me, last_turn_at=self.ago(2))
+        self.assertEqual(self.hits()[4], {"key": "SHOP", "session_id": "m-live-full", "glyph": "↻", "reset_x": 2, "manager": True})
+        self.assertTrue(self.tree(40).splitlines()[4].startswith("  ↻ manager "))
+        self.assertEqual(self.open_line(4, x=4), ["respawn-pane|-k|-t|%9|claude attach m-live-f|", "set|-p|-t|%9|@ws_name|SHOP|"])
+        self.assertEqual(self.open_line(4, self.BG.replace("control", "SHOP"), x=2), [self.ATTACH + "9d9d9d9d|", "set|-p|-t|%9|@ws_name|SHOP|"])
+        self.assertEqual((Path(self.home) / "claude.log").read_text().splitlines(), ["stop m-live-f", "--bg -n SHOP --model sonnet --permission-mode auto /workstreams:project"])
 
     def test_option_n_stops_at_a_project_managers_row(self):
         self.project(members=("PAY",)); self.write_charter("ZED")

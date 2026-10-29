@@ -735,10 +735,10 @@ def tree(records, color=False, width=None, hits=None, current=None, height=None)
             heads = [l for l in ls if not nested(l[-1])]
             sessions += [(key, note.startswith("[duplicate]"), l, home, [w for w in ls if nested(w[-1])] if n == 0 else []) for n, l in enumerate(heads)]
         for i, (key, dup, (tag, _, code, _, short, kids, guess, sid, reset, wk), home, workers) in enumerate(sessions):
-            # A project's manager row clicks as control's and shows its lease, unless an ask or an unread reply says itself.
-            if mgr := home == "manager": reset = False; short = short if code in ("31", "33") else "click to open" if tag == "–" else lease(records, key)
+            # A project's manager row shows its lease, unless an ask or an unread reply says itself.
+            if mgr := home == "manager": short = short if code in ("31", "33") else "click to open" if tag == "–" else lease(records, key)
             # A stale row's status is that it is stale, so its glyph is the reset button. A dormant row (tag "–", nothing live, a retired session or none) is ◌; a live one keeps ○.
-            glyph = "◇" if mgr else "↻" if reset else "⏸" if home == "Blocked" else {"31": "●", "33": "●", "32": "▶"}.get(code, "◌" if tag == "–" else "○")
+            glyph = "↻" if reset else "◇" if mgr else "⏸" if home == "Blocked" else {"31": "●", "33": "●", "32": "▶"}.get(code, "◌" if tag == "–" else "○")
             hits[len(out)] = {"key": key, "session_id": sid, "glyph": glyph} | ({"worker": wk["name"]} if wk else {}) | ({"reset_x": 2} if reset else {}) | ({"manager": True} if mgr else {}) | need(code)   # reset_x: the column after the two-column lead
             if home == "Blocked":   # a block's label may take half the row, and what it waits on gives way before its age
                 what, tail = re.fullmatch(r"(.*?)((?: · \d+[mhd])?)", short).groups(); short = oneline(what, W // 2 - len(tail)) + tail
@@ -835,7 +835,7 @@ def decide(entry, reg, rec=None, x=None, rows=dict):
     the click's column (None opens) and a reader of the agents listing, called only for a session that is not live.
     ("attach", job) | ("restart", job) | ("dispatch", key) | ("message", text) | None for an unmapped line."""
     if not entry: return None
-    control, sid = entry["key"] == "control" or "manager" in entry, entry.get("session_id")   # a project manager's row clicks as control's
+    control, sid = entry["key"] == "control", entry.get("session_id")
     live = bool(sid and reg and reg.get("sessionId") == sid)   # a reused pid names another session
     reset = x is not None and "reset_x" in entry and entry["reset_x"] <= x <= entry["reset_x"] + 1   # the ↻ and the space after it
     if not sid or (control or reset) and not live: return ("dispatch", entry["key"])   # control holds no state: an ended one is simply replaced
