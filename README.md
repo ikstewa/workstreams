@@ -90,17 +90,16 @@ In a session, `/workstreams:board` prints the same board, ranks the decisions it
 
 ### Jira and GitHub links
 
-The mod can also draw Jira issue keys and GitHub refs written as `<repo> #<n>` in Claude's replies as links to their issues or pull requests. It changes only what the terminal draws: the stored message and the model's context keep the bare text. A key or ref inside code, an existing link or a URL is left as written. Only the listed projects' keys and the listed repositories' refs link, so `UTF-8`, `SHA-256`, `PR #198` and a bare `#197` stay as written.
+The mod can also draw Jira issue keys and GitHub refs written as `owner/repo#<n>` in Claude's replies as links to their issues or pull requests. It changes only what the terminal draws: the stored message and the model's context keep the bare text. A key or ref inside code, an existing link or a URL is left as written. A ref without its owner, such as `repo#198` or a bare `#197`, stays as written, and only the listed projects' keys link, so `UTF-8` and `SHA-256` stay as written too.
 
-It links nothing until you set your Jira site and project keys, or your repositories as `owner/repo`, in `/config` or in `~/.claude/settings.json`:
+GitHub refs need no setup. Jira keys link once you set your Jira site and project keys in `/config` or in `~/.claude/settings.json`:
 
 ```json
 "pluginConfigs": {
   "workstreams@ikstewa": {
     "options": {
       "jiraUrl": "https://example.atlassian.net",
-      "jiraProjectKeys": ["PROJ", "OPS"],
-      "githubRepos": ["octo-org/widgets"]
+      "jiraProjectKeys": ["PROJ", "OPS"]
     }
   }
 }
