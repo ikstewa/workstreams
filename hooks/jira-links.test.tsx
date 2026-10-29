@@ -86,6 +86,12 @@ test('a listed repo ref links to its issue, which GitHub redirects for a PR', RE
   expect(await textAfter($, on, 'See waypoints #197 and triage-lite #2.')).toBe(`See ${ref('waypoints', 197)} and ${ref('triage-lite', 2)}.`)
 })
 
+test('a ref without the space links too and keeps its text', REPOS, async ($, on) => {
+  expect(await textAfter($, on, 'waypoints#267 (graph loader fixes)')).toBe(
+    '[waypoints#267](https://github.com/octo-org/waypoints/issues/267) (graph loader fixes)',
+  )
+})
+
 test('a word that is not a listed repo stays as written', REPOS, async ($, on) => {
   const text = 'issue #193, PR #198, milestone #6, goal #38 and bare #197'
   expect(await textAfter($, on, text)).toBe(text)

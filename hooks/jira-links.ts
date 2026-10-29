@@ -1,6 +1,6 @@
 import type { On, PluginOptions } from 'claude-code'
 
-// Jira issue keys and GitHub refs (`repo #12`) in the model's replies, drawn as links to their issues. The drawing alone changes:
+// Jira issue keys and GitHub refs (`repo #12` or `repo#12`) in the model's replies, drawn as links to their issues. The drawing alone changes:
 // the stored message and the model's context keep the bare text.
 
 // Spans that must stay as written come first in the alternation; a key or ref outside them is one of the last alternatives. The
@@ -14,7 +14,7 @@ const spans = (keys: readonly string[], repos: readonly string[]) =>
       String.raw`<[^>\s]*>`, // autolink
       String.raw`https?://[^\s<>)\]]*`, // bare URL
       ...(keys.length ? [String.raw`(?<![\w/.-])(?<key>(?:${keys.join('|')})-\d+)\b`] : []),
-      ...(repos.length ? [String.raw`(?<![\w/.-])(?<repo>${repos.map(r => r.replaceAll('.', '\\.')).join('|')}) #(?<num>\d+)\b`] : []),
+      ...(repos.length ? [String.raw`(?<![\w/.-])(?<repo>${repos.map(r => r.replaceAll('.', '\\.')).join('|')}) ?#(?<num>\d+)\b`] : []),
     ].join('|'),
     'g',
   )
@@ -39,7 +39,7 @@ export function issueLinks(on: On, options: PluginOptions): void {
     const text = e.props.text.replace(pattern, (...args) => {
       const { key, repo, num } = args.at(-1) as { key?: string; repo?: string; num?: string }
       if (key !== undefined) return `[${key}](${site}/browse/${key})`
-      if (repo !== undefined) return `[${repo} #${num}](https://github.com/${owners.get(repo)}/${repo}/issues/${num})`
+      if (repo !== undefined) return `[${args[0]}](https://github.com/${owners.get(repo)}/${repo}/issues/${num})`
       return args[0] as string
     })
     return next({ ...e, props: { ...e.props, text } })
