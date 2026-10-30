@@ -91,8 +91,18 @@ test('a ref without its owner stays as written', async ($, on) => {
   expect(await textAfter($, on, text)).toBe(text)
 })
 
-test('a ref in code, a link, a URL, a longer path or a longer token is untouched', async ($, on) => {
-  const text = '`o/r#1`, [o/r#2](https://x.test), https://x.test/o/r#3, a/b/c#4 and o/r#5a'
+test('a ref in longer code, a link, a URL, a longer path or a longer token is untouched', async ($, on) => {
+  const text = '`gh pr view o/r#1`, [o/r#2](https://x.test), https://x.test/o/r#3, a/b/c#4 and o/r#5a'
+  expect(await textAfter($, on, text)).toBe(text)
+})
+
+test('a code span holding only a key or a ref links, keeping its code look', OPTIONS, async ($, on) => {
+  expect(await textAfter($, on, 'I opened `octo-org/waypoints#289` for `PROJ-8541`, not `o/r#2 x`'))
+    .toBe('I opened [`octo-org/waypoints#289`](https://github.com/octo-org/waypoints/issues/289) for [`PROJ-8541`](https://example.atlassian.net/browse/PROJ-8541), not `o/r#2 x`')
+})
+
+test('a code span holding only a key of a project not configured stays as written', OPTIONS, async ($, on) => {
+  const text = '`DOCS-4` and `` OPS-x ``'
   expect(await textAfter($, on, text)).toBe(text)
 })
 
