@@ -1240,7 +1240,7 @@ def act(req):
     elif a == "quota": said = quota_text()
     elif a == "needs":
         if not all(isinstance(i, str) for i in req["items"]): ok, said = False, "items must be a list of texts"
-        else: dstate(p, lambda d: {"needs": req["items"]}); said = f"{len(req['items'])} items need Ian"
+        else: dstate(p, lambda d: {"needs": req["items"]}); n = len(req["items"]); said = f"{n} item{'s' * (n != 1)} on the Needs-Ian list"
     elif a == "pr":
         if not REF.search(req["pr"]): ok, said = False, "pr must be owner/repo#n or its URL"
         else: dstate(p, lambda d: {"prs": sorted(set(d.get("prs") or []) | {req["pr"]})}); said = f"watching {req['pr']}"

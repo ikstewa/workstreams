@@ -2901,12 +2901,12 @@ class BoardTest(unittest.TestCase):
     def test_the_board_tool_keeps_a_projects_quota_needs_prs_and_restart(self):
         self.project()
         self.assertEqual(self.act(action="quota"), {"ok": True, "summary": "no quota reading"})
-        self.assertEqual(self.act(action="needs", project="SHOP", items=["merge PR 12"]), {"ok": True, "summary": "1 items need Ian"})
+        self.assertEqual(self.act(action="needs", project="SHOP", items=["merge PR 12"]), {"ok": True, "summary": "1 item on the Needs-Ian list"})
         self.assertEqual(self.act(action="pr", project="SHOP", pr="https://github.com/octo-org/gadgets/pull/7"), {"ok": True, "summary": "watching https://github.com/octo-org/gadgets/pull/7"})
         self.assertEqual(self.act(action="pr", project="SHOP", pr="soon"), {"error": "pr must be owner/repo#n or its URL"})
         d = json.loads((self.board / "project-SHOP.json").read_text())
         self.assertEqual((d["needs"], d["prs"]), (["merge PR 12"], ["https://github.com/octo-org/gadgets/pull/7"]))
-        self.assertEqual(self.act(action="needs", project="SHOP", items=[]), {"ok": True, "summary": "0 items need Ian"})
+        self.assertEqual(self.act(action="needs", project="SHOP", items=[]), {"ok": True, "summary": "0 items on the Needs-Ian list"})
         self.assertEqual(self.act(action="restart", key="NOPE"), {"error": "NOPE: no live session"})
 
 if __name__ == "__main__":
