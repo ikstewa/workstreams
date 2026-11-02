@@ -206,6 +206,9 @@ WRITES = {"focus": "text", "record": "text", "add_goals": "a list of goal texts"
 
 DATED = re.compile(r"- (?:\*\*)?(?:\d{4}-)?\d\d-\d\d")   # a dated row's bullet: **10-04**, 2026-10-04: and 2026-10-04 (Ian) all start so
 
+archive = lambda key: ws_dir() / key / "record-archive.md"
+pointer = lambda key: f"Earlier rows: {key}/record-archive.md"   # the line roll() leaves at the top of the record
+
 def roll(key, body):
     """(body, N): `body` with its oldest N dated rows moved to <KEY>/record-archive.md, in order, until it fits two thirds of RECORD_BUDGET
     or no dated row is left, and the one line pointing at the archive at its top. A row runs from its bullet to the next bullet or heading."""
@@ -219,9 +222,9 @@ def roll(key, body):
         if size <= RECORD_BUDGET * 2 // 3: break
         if DATED.match(s[0]): gone.add(i); size -= sum(len(l) + 1 for l in s)
     if not gone: return body, 0
-    a = ws_dir() / key / "record-archive.md"; a.parent.mkdir(parents=True, exist_ok=True)
+    a = archive(key); a.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(a, (a.read_text() if a.exists() else "") + "".join(l + "\n" for i in sorted(gone) for l in segs[i]))   # before the charter: a crash between repeats rows, never loses them
-    kept, ptr = [l for i, s in enumerate(segs) if i not in gone for l in s], f"Earlier rows: {key}/record-archive.md"
+    kept, ptr = [l for i, s in enumerate(segs) if i not in gone for l in s], pointer(key)
     return "\n" + "\n".join(kept if ptr in kept else [ptr, ""] + kept).strip("\n") + "\n", len(gone)
 
 def write(sid, req):
@@ -329,9 +332,9 @@ BOUND_RULES = ("You are the active session for this workstream. Work through sub
                "When a worker reports, confirm you have what you needed from it, then close it with the same tool once its PR merges or its task is done; "
                "until then, reply to it. "
                "Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the mcp__workstreams__charter tool: "
-               "load it with ToolSearch first, and never edit the charter file. "
+               "load it with ToolSearch first, and change the charter no other way. "
                "A record entry is one or two lines: what changed and what is next. Cite Ian's decisions by date and a few words, never quote him at length, "
-               "and do not restate what a commit or PR already holds. Old rows roll to the charter's archive on their own. "
+               "and do not restate what a commit or PR already holds. Old rows roll to the archive on their own. "
                "Each goal is mirrored on your task list: when you start on one, set its task to in_progress with TaskUpdate, which opens Ian's task panel, "
                "and completing its task ticks the goal. When new work appears, add it as a goal with the tool. Ask before any push. "
                "The workstream is private to this machine: never mention it, its charter, goals, record or block in anything that leaves the machine, "
@@ -355,8 +358,13 @@ WORKER_BRIEF = ("# Workstream charter (worker of {key})\n\n"
                 "such as a commit message, a PR title or description, a ticket, a comment or a document. State what the work is for in its own terms.")
 
 RECORD_BUDGET = 30_000   # characters of the record a session is handed: its newest, where the handoff is
+ARCHIVED = "Earlier rows are archived: the archive action of the mcp__workstreams__board tool reads them."
 
-def charter_text(path, fm, body, refresh=False):
+def readable(key, body):
+    """A record as a session reads it: roll()'s pointer line says how to read the archive, not where it is."""
+    return body.replace(pointer(key), ARCHIVED)
+
+def charter_text(key, fm, body, refresh=False):
     """What a bound session reads of its charter: the rules ahead of everything a budget could cut, the frontmatter whole, then the
     record's newest RECORD_BUDGET characters from a line start. A refresh leaves the record out: the session already holds it.
     Done goals stay in the file, which the board and the task list read, and leave the text, with a count in their place."""
@@ -368,13 +376,13 @@ def charter_text(path, fm, body, refresh=False):
             pos += len(l) + 1
         fm = "\n".join(keep)
     chain = CHAIN.format(p=p) if (p := scalar(fm, "project")) else ""
-    text = f"# Workstream charter ({path})\n\n# Operating rules\n{BOUND_RULES}{chain}\n\n---\n{fm}\n---"
+    text = f"# Workstream charter ({key})\n\n# Operating rules\n{BOUND_RULES}{chain}\n\n---\n{fm}\n---"
     if refresh: return text
-    body = body.strip()
+    body = readable(key, body).strip()
     if len(body) > RECORD_BUDGET:
         tail = body[-RECORD_BUDGET:]
         if body[-RECORD_BUDGET - 1] != "\n": tail = tail[tail.find("\n") + 1:]
-        body = f"(earlier record omitted: read {path})\n{tail}"
+        body = f"(earlier record omitted: the charter action of the mcp__workstreams__board tool reads it whole)\n{tail}"
     return f"{text}\n\n# Record\n{body}"
 
 def charter(sid, refresh=False):
@@ -385,7 +393,7 @@ def charter(sid, refresh=False):
     rec = new_record({"session_id": sid}, hit[1])
     if rec["kind"] not in ("active", "worker") or not (found := find_charter(rec["workstream"])): return out
     if rec["kind"] == "worker": return out | {"key": rec["workstream"], "worker": True, "text": WORKER_BRIEF.format(key=rec["workstream"])}
-    return out | {"key": rec["workstream"], "path": str(found[0]), "text": charter_text(*found, refresh)}
+    return out | {"key": rec["workstream"], "path": str(found[0]), "text": charter_text(rec["workstream"], *found[1:], refresh)}
 
 def alive(pid):
     # Both checks. The registry file outlives a killed session by seconds to tens of seconds, so
@@ -1166,19 +1174,93 @@ def watch(p):
             old = new
         time.sleep(POLL)
 
+def quota_text():
+    q = limits(); return quota_line(q) and f"{quota_line(q)} · read {ago(q['age'])} ago" or "no quota reading"
+
+def last(records):
+    """Each live session's name, short id, state and last reply, one line each: what the board's judgment reads beside the render."""
+    live = sorted((r for r in records if r["state"] != "ended" and alive(r.get("pid"))), key=lambda r: (r["name"], r["session_id"]))
+    return "\n".join(f"{r['name']} {r['session_id'][:8]} · " + " · ".join(filter(None, (r["state"], r.get("waiting_for"))))
+                     + f": {oneline(r.get('last_message') or '(no reply yet)', 300)}" for r in live) or "no live session"
+
+def sweep():
+    """The records the board's sweep prunes: an ended one a week old, and one a day old whose pid has no registry file. The count."""
+    n = 0
+    for p in board_dir().glob("*.json"):
+        if p.name in ("tree-rows.json", "open.json") or p.name.startswith("project-"): continue
+        r = load_record(p.stem) or {}; h = hours_since(r.get("updated_at"))
+        if h is not None and (r.get("state") == "ended" and h > 7 * 24 or reg_of(r.get("pid")) is None and h > 24): p.unlink(missing_ok=True); n += 1
+    return n
+
+def create(key, text):
+    """A charter for `key` from `text`, frontmatter then record, which must name the key; for a key that has one, text's record goes on
+    the end of its record instead. (ok, report)."""
+    m = FRONT.match(text.strip() + "\n")
+    if not (m and re.search(rf"^workstream:\s*{re.escape(key)}\s*$", m.group(1), re.M)): return False, f"text must open with frontmatter whose workstream: line is {key}"
+    if found := find_charter(key):
+        with locked(found[0]): atomic_write(found[0], found[0].read_text().rstrip("\n") + "\n" + m.group(2).strip("\n") + "\n")
+        return True, f"{key}: rows added to its record"
+    if not re.fullmatch(r"[\w.-]+", key): return False, f"{key} is not a key: letters, digits, _, . and - only"
+    ws_dir().mkdir(parents=True, exist_ok=True); p = ws_dir() / f"{key}.md"
+    with locked(p): atomic_write(p, text.strip() + "\n")
+    return True, f"{key}: charter created"
+
+# The board tool's actions, each with the fields it needs; act() refuses a call that lacks one.
+ACTS = {"render": (), "last": (), "charter": ("key",), "archive": ("key",), "join": ("key", "project"), "leave": ("key",),
+        "snooze": ("key", "length"), "unsnooze": ("key",), "status": ("key", "status"), "create": ("key", "text"), "sweep": (),
+        "quota": (), "needs": ("project", "items"), "pr": ("project", "pr"), "restart": ("key",)}
+
+def act(req):
+    """`board.py act <session-id>`, the mod's board tool: one action on workstream state, its fields on stdin, as {ok, summary} or {error}.
+    What a session reads or changes of the board, a charter or a project's state goes through here, so no skill names a file."""
+    a, key, p = req.get("action"), req.get("key"), req.get("project")
+    if a not in ACTS: return {"error": f"action must be one of {', '.join(ACTS)}"}
+    if bad := [f for f in ACTS[a] if not (isinstance(req.get(f), list) if f == "items" else isinstance(req.get(f), str) and req[f].strip())]:
+        return {"error": f"the {a} action needs {' and '.join(bad)}"}
+    if a in ("needs", "pr") and p not in projects(): return {"error": f"give a project's key: {', '.join(projects()) or 'no charter has kind: project'}"}
+    ok, said = True, ""
+    if a in ("render", "last"):
+        records = load_records(); ok = not isinstance(records, str)
+        said = records if not ok else render(records) if a == "render" else last(records)
+    elif a in ("charter", "archive"):
+        found = find_charter(key); ok = bool(found)
+        if not ok: said = f"no charter for {key}"
+        elif a == "charter": said = f"---\n{found[1]}\n---\n{readable(key, found[2]).strip()}"
+        else: said = archive(key).read_text().strip() if archive(key).exists() else f"{key} has no archived rows"
+    elif a in ("join", "leave"): ok, said = join(key, p if a == "join" else None)
+    elif a in ("snooze", "unsnooze"):
+        until = a == "snooze" and until_of(req["length"])
+        if until is None: ok, said = False, "give a length such as 90m, 3h or 1d"
+        else: said = snooze(key, until or None); ok, said = bool(said), said or f"no charter for {key}"
+    elif a == "status":
+        if req["status"] not in ("active", "done", "archived"): ok, said = False, "status must be active, done or archived"
+        else: ok = set_line(key, "status", f"status: {req['status']}"); said = f"{key}: status {req['status']}" if ok else f"no charter for {key}"
+    elif a == "create": ok, said = create(key, req["text"])
+    elif a == "sweep": said = f"{sweep()} board records pruned"
+    elif a == "quota": said = quota_text()
+    elif a == "needs":
+        if not all(isinstance(i, str) for i in req["items"]): ok, said = False, "items must be a list of texts"
+        else: dstate(p, lambda d: {"needs": req["items"]}); n = len(req["items"]); said = f"{n} item{'s' * (n != 1)} on the Needs-Ian list"
+    elif a == "pr":
+        if not REF.search(req["pr"]): ok, said = False, "pr must be owner/repo#n or its URL"
+        else: dstate(p, lambda d: {"prs": sorted(set(d.get("prs") or []) | {req["pr"]})}); said = f"watching {req['pr']}"
+    elif a == "restart": ok, said = restart(key)
+    return {"ok": True, "summary": said} if ok else {"error": said}
+
 def main():
     if sys.argv[1:2] in (["watch"], ["needs"], ["pr"]) and (sys.argv[2:3] or [None])[0] not in projects():
         print(f"give a project's key: {', '.join(projects()) or 'no charter has kind: project'}"); sys.exit(1)
     if sys.argv[1:2] == ["watch"]: watch(sys.argv[2]); return
     if sys.argv[1:2] == ["needs"]: dstate(sys.argv[2], lambda d: {"needs": json.load(sys.stdin)}); return
     if sys.argv[1:2] == ["pr"]: dstate(sys.argv[2], lambda d: {"prs": sorted(set(d.get("prs") or []) | set(sys.argv[3:]))}); return
-    if sys.argv[1:2] == ["quota"]: q = limits(); print(quota_line(q) and f"{quota_line(q)} · read {ago(q['age'])} ago" or "no quota reading"); return
+    if sys.argv[1:2] == ["quota"]: print(quota_text()); return
     if sys.argv[1:2] in (["join"], ["leave"], ["restart"]):
         ok, said = restart(sys.argv[2]) if sys.argv[1] == "restart" else join(*sys.argv[2:4 if sys.argv[1] == "join" else 3]); print(said); sys.exit(not ok)
     if sys.argv[1:2] == ["charter"]: print(json.dumps(charter(sys.argv[2], "--refresh" in sys.argv[3:]))); return
     if sys.argv[1:2] == ["event"]: event(sys.argv[2], json.load(sys.stdin)); return
     if sys.argv[1:2] == ["write"]: print(json.dumps(write(sys.argv[2], json.load(sys.stdin)))); return
     if sys.argv[1:2] == ["worker"]: print(json.dumps(worker(sys.argv[2], json.load(sys.stdin)))); return
+    if sys.argv[1:2] == ["act"]: print(json.dumps(act(json.load(sys.stdin)))); return
     if sys.argv[1:2] == ["mirror"]: sync(sys.argv[2]); return
     if sys.argv[1:2] == ["tick"]: sync(sys.argv[2], sys.argv[3]); return
     if sys.argv[1:2] == ["open"]:

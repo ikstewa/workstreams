@@ -14,6 +14,8 @@ const REG = '/home/.claude/sessions/4242.json'
 const CHARTERED = ['PAYMENTS_API', 'ADOPTED']   // what board.py finds a charter for
 const TOOL = 'mcp__workstreams__charter'
 const WORKER_TOOL = 'mcp__workstreams__worker'
+const BOARD_TOOL = 'mcp__workstreams__board'
+const ACTED = JSON.stringify({ ok: true, summary: 'A joined SHOP' })   // what board.py act prints
 const STARTED = JSON.stringify({ ok: true, summary: 'started "PAYMENTS_API work: fix", id 9d9d9d9d' })   // what board.py worker prints
 const WORKER_ROW = (key: string) => `# Workstream charter (worker of ${key})\n\nYou are a worker of workstream ${key}.`
 const WROTE = JSON.stringify({ ok: true, key: 'PAYMENTS_API', summary: 'focus set\n2 goals left' })   // what board.py write prints
@@ -65,6 +67,9 @@ function harness(name: string | null = 'PAYMENTS_API') {
     launches: [] as { sid: string; fields: unknown; timeoutMs?: number }[],   // board.py worker: the session id, the fields on stdin, its timeout
     launched: STARTED,
     launchFail: undefined as 'exit' | 'slow' | undefined,
+    acts: [] as { sid: string; fields: unknown; timeoutMs?: number }[],   // board.py act: the session id, the fields on stdin, its timeout
+    acted: ACTED,
+    actFail: undefined as 'exit' | undefined,
     tools: [] as ToolSpec[],   // $.tool.register, each call
     unregistrable: false,   // $.tool.register rejects
     core: [] as string[],   // tool calls that reached core
@@ -138,6 +143,10 @@ function harness(name: string | null = 'PAYMENTS_API') {
             w.launches.push({ sid, fields: JSON.parse(init.stdin ?? '{}'), timeoutMs: init.timeoutMs })
             if (w.launchFail === 'slow') throw new Error('process.run: still running at 8000 ms')
             return w.launchFail === 'exit' ? done('', 1, 'Traceback (most recent call last):\nOSError: boom\n') : done(w.launched)
+          }
+          if (cmd === 'act') {
+            w.acts.push({ sid, fields: JSON.parse(init.stdin ?? '{}'), timeoutMs: init.timeoutMs })
+            return w.actFail === 'exit' ? done('', 1, 'Traceback (most recent call last):\nOSError: boom\n') : done(w.acted)
           }
           if (cmd !== 'write') return done('')
           w.writes.push({ sid, fields: JSON.parse(init.stdin ?? '{}'), timeoutMs: init.timeoutMs })
@@ -712,25 +721,25 @@ test('board.py runs one event at a time', async () => {
 
 const FIELDS = { focus: 'F', record: 'R', add_goals: ['G'], block: 'B', clear_block: true }
 
-test('the charter tool is registered whenever board.py finds the session bound, and never while it is unbound', async () => {
+test('the charter and worker tools are registered whenever board.py finds the session bound, and the board tool at every read', async () => {
   const { w, fire } = harness('loose')
   await fire.start()
   await fire.prompt('a')
   await fire.end('clear')
   await fire.prompt('b')
-  expect(w.tools).toEqual([])
+  expect(w.tools.map(t => t.name)).toEqual(['board', 'board'])   // unbound: the start's read and the /clear's
   w.name = 'ADOPTED'
   await fire.prompt('c')   // a /rename binds it
-  expect(w.tools.map(t => t.name)).toEqual(['charter', 'worker'])
+  expect(w.tools.slice(2).map(t => t.name)).toEqual(['charter', 'worker', 'board'])
   await fire.end('clear')
   w.sid = 's2'
   await fire.prompt('d')   // the full row after a /clear registers them again
-  expect(w.tools).toHaveLength(4)
+  expect(w.tools).toHaveLength(8)
   const bound = harness()
   await bound.fire.start()
   const [spec] = bound.w.tools
   expect(Object.keys((spec?.inputSchema as { properties: object }).properties)).toEqual(Object.keys(FIELDS))
-  expect(spec?.description).toContain('Do not edit the charter file yourself.')
+  expect(spec?.description).toContain('Change it no other way.')
   expect(spec?.description.split('\n').filter(l => l !== '' && !l.endsWith('.'))).toEqual([])   // no break inside a sentence
 })
 
@@ -739,7 +748,7 @@ test('a refused registration logs one debug line, and the charter row still land
   w.unregistrable = true
   await fire.start()
   expect(w.rows).toHaveLength(1)
-  expect(w.logs).toEqual([{ to: 'debug', text: 'charter tool not registered: tool.register: refused' }, { to: 'debug', text: 'worker tool not registered: tool.register: refused' }])
+  expect(w.logs).toEqual(['charter', 'worker', 'board'].map(name => ({ to: 'debug', text: `${name} tool not registered: tool.register: refused` })))
 })
 
 test('a worker of a charter key is briefed and offered neither tool; a worker of an unchartered key gets nothing', async () => {
@@ -793,6 +802,37 @@ for (const [how, why] of [['sub-agent', 'only the main session starts a worker']
     expect(w.core).toEqual([])
   })
 }
+
+test('every tool description names no file, and the board tool takes an action and plain fields, written as sentences', async () => {
+  const { w, fire } = harness()
+  await fire.start()
+  expect(w.tools.map(t => t.name)).toEqual(['charter', 'worker', 'board'])
+  for (const spec of w.tools) expect(spec.description).not.toMatch(/board\.py|\.json|\.md\b|~\/|\bfiles?\b|\/Users\//)
+  const spec = w.tools.find(t => t.name === 'board')
+  expect(spec?.inputSchema).toMatchObject({ required: ['action'], additionalProperties: false })
+  expect(Object.keys((spec?.inputSchema as { properties: object }).properties)).toEqual(['action', 'key', 'project', 'length', 'status', 'text', 'items', 'pr'])
+  expect(spec?.description.split('\n').filter(l => l !== '' && !l.endsWith('.'))).toEqual([])   // no break inside a sentence
+})
+
+test('a board call, from the main session or a sub-agent, queues one act with its fields and answers with its summary; core never runs it', async () => {
+  const { w, fire } = harness('loose')
+  expect(await fire.call(BOARD_TOOL, 't1', { action: 'join', key: 'A', project: 'SHOP', consent: 'yes' })).toEqual({ result: 'A joined SHOP' })
+  await fire.call(BOARD_TOOL, 't2', { action: 'render', agentId: 'a1' })
+  expect(w.acts).toEqual([{ sid: 's1', fields: { action: 'join', key: 'A', project: 'SHOP' }, timeoutMs: 50_000 }, { sid: 's1', fields: { action: 'render' }, timeoutMs: 50_000 }])
+  expect(w.jobs).toEqual(['act s1', 'act s1'])
+  expect(w.core).toEqual([])
+})
+
+test('a board call that fails is refused with why, never throws, and the next call is done', async () => {
+  const { w, fire } = harness()
+  w.acted = JSON.stringify({ error: 'no charter for NOPE' })
+  expect(await fire.call(BOARD_TOOL, 't1', { action: 'charter', key: 'NOPE' })).toEqual({ deny: 'no charter for NOPE' })
+  Object.assign(w, { acted: ACTED, actFail: 'exit' })
+  expect(await fire.call(BOARD_TOOL, 't2', { action: 'sweep' })).toEqual({ deny: 'the board sweep was not done: board.py exited 1: OSError: boom' })
+  w.actFail = undefined
+  expect(await fire.call(BOARD_TOOL, 't3', { action: 'sweep' })).toEqual({ result: 'A joined SHOP' })
+  expect(w.core).toEqual([])
+})
 
 test('a charter call reads its fields off the event, queues one write and answers with its summary, and core never runs it', async () => {
   const { w, fire } = harness()
@@ -986,7 +1026,7 @@ test('in the engine, a start registers the charter tool and mirrors; the mod ans
   const k = engine(on)
   await startIn($)
   await k.clock.settle()
-  expect(k.tools).toEqual(['charter', 'worker'])
+  expect(k.tools).toEqual(['charter', 'worker', 'board'])
   const wrote = $.tool.call({ tool: TOOL, focus: 'F' })
   await k.clock.settle()   // the call waits for its write, which a timer on the held clock runs
   expect(await wrote).toEqual({ result: 'focus set\n2 goals left' })

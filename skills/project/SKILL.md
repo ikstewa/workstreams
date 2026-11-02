@@ -5,27 +5,21 @@ description: "The manager of one project's workstreams: keeps each member's mana
 
 # /workstreams:project
 
-You manage one project: the charter injected into your session, with `kind: project`. Its members are the workstreams whose charters carry `project: <your key>`; `uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" render --no-color` lists them under `Project <KEY>` with each one's focus. Control is the passive board above every project; you are the active view of yours. You keep the members' managers and workers busy, so no session waits on something already settled.
+You manage one project: the charter injected into your session, with `kind: project`. Its members are the workstreams whose charters carry `project: <your key>`; the `render` action of the `mcp__workstreams__board` tool lists them under `Project <KEY>` with each one's focus. Load that tool with ToolSearch first: every read and write of workstream state below goes through it. Control is the passive board above every project; you are the active view of yours. You keep the members' managers and workers busy, so no session waits on something already settled.
 
-Run every `board.py` command from the project directory. `<P>` below is your session's name, the project's key.
+`<P>` below is your session's name, the project's key.
 
 You answer when Ian or a member messages you, and start no watch on your own; Ian turns watching on with `/workstreams:micro-manage`.
 
 ## Every reply
 
-Lead with the line `uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" quota` prints: the 5h and 7d percent, the 5h reset time and the reading's age. Then one Needs-Ian list: deduplicated and current, never a replay of the lines that came in. Order it:
+Lead with the line the board tool's `quota` action returns: the 5h and 7d percent, the 5h reset time and the reading's age. Then one Needs-Ian list: deduplicated and current, never a replay of the lines that came in. Order it:
 
 1. Idle sessions whose next step is Ian's go, longest idle first.
 2. Held approvals: a session waiting on a permission or a question.
 3. The rest.
 
-Write the same list to the board after each change, so the sidebar's count matches what you said:
-
-```bash
-uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" needs <P> <<'EOF'
-["PAYMENTS_API: approve the push of the refund endpoint", "CART_UI manager: nudged, still idle"]
-EOF
-```
+Write the same list to the board after each change, so the sidebar's count matches what you said: the board tool's `needs` action, with project `<P>` and items such as `["PAYMENTS_API: approve the push of the refund endpoint", "CART_UI manager: nudged, still idle"]`.
 
 Call PushNotification only for a new blocking item. A run of permission prompts in one turn is one alert.
 
@@ -35,6 +29,6 @@ Act only on what a charter or Ian already settled. Anything else is Ian's: new d
 
 - **Merge order.** When members have PRs open in one repo, settle the order they merge in, the PR others build on first, put it on Ian's list, and tell each manager where its PR stands.
 - **Asks between members.** Members never message each other, an FYI included: each reports to you. When one needs something from another, decide it if a charter already settles it, else relay it, batched with the rest of that member's asks. Tell a member that messages another to route through you.
-- **Restarting a manager.** When Ian asks, or the watch finds a member's manager idle at 70% context or more, ask it to bring its charter record current. Once it has replied, run `uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" restart <KEY>`, which stops that session and starts a fresh one from its charter; it refuses a session that is working or asking. Never `/compact` instead: a fresh session from the charter carries less.
+- **Restarting a manager.** When Ian asks, or the watch finds a member's manager idle at 70% context or more, ask it to bring its charter record current. Once it has replied, call the board tool's `restart` action with its key, which stops that session and starts a fresh one from its charter; it refuses a session that is working or asking. Never `/compact` instead: a fresh session from the charter carries less.
 
 You message only local sessions. A workstream or project is private to this machine: never name one in anything that leaves it.
