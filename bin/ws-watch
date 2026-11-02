@@ -1,0 +1,4 @@
+#!/bin/sh
+# A project manager's watch, `ws-watch <PROJECT>`, for its Monitor tool. Claude Code puts an enabled plugin's bin/ on the Bash tool's
+# PATH, so the skill names this command and no file.
+exec uv run --no-project "$(dirname "$0")/../hooks/board.py" watch "$@"

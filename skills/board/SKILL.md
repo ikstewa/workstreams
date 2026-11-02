@@ -5,15 +5,11 @@ description: Use when the user types /workstreams:board, asks what is running, w
 
 # /workstreams:board
 
-Board dir: `board_dir()` in `hooks/board.py`. Workstream records: `~/.claude/projects/<slug>/workstreams/<KEY>.md`, charter frontmatter plus handoff body. Never read `memory/` for workstream state, except in the sweep's migration below, and never write a workstream fact into `MEMORY.md`.
+Every read and write of workstream state, the board, a charter or its record, goes through the `mcp__workstreams__board` tool: load it with ToolSearch first. Its actions are below. Never read `memory/` for workstream state, except in the sweep's migration below, and never write a workstream fact into `MEMORY.md`.
 
 ## Render (default)
 
-Run, from the project directory:
-```bash
-uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" render --no-color
-```
-Present it with the template below. The render decides *what* is on the board: every group, row, `note:` and `last:` line, child and the stale line it prints appears, in its order, and nothing it does not print is added. The template decides only *how* it looks. The tmux sidebar is the same board, narrow, so the two always agree.
+Call the board tool with action `render`. Present it with the template below. The render decides *what* is on the board: every group, row, `note:` and `last:` line, child and the stale line it prints appears, in its order, and nothing it does not print is added. The template decides only *how* it looks. The tmux sidebar is the same board, narrow, so the two always agree.
 
 Template (groups in the render's order, Control, one group per project under its `Project <KEY> · …` header, Active, Blocked, Idle, Unassigned, Done, Snoozed; omit a group the render omits; `…` repeats):
 ```markdown
@@ -71,27 +67,19 @@ _stale (38, no session in 3d): PAYMENTS_API, PROJ-31, PROJ-44, …_
 ```
 A project's group holds its manager's row first, then its member workstreams, each keeping the state of the group it would otherwise be in. A Blocked row waits on something outside its session, such as a review or a merge, and is not Ian's move. A Done row has every goal ticked and no live session, or is a `done` workstream whose live session is neither working nor asking Ian. A Snoozed row is a workstream Ian put aside until a time: its sessions run on, and the row shows only the time left.
 
-The filled example truncates the stale line for space; yours never does. Grouping, liveness, labels, the goal count, the duplicate flag and the stale line are `place()` in `hooks/board.py` (spec §6; a dormant row's goal label, §2), not something to recompute here.
+The filled example truncates the stale line for space; yours never does. Grouping, liveness, labels, the goal count, the duplicate flag and the stale line are the render's (spec §6; a dormant row's goal label, §2), not something to recompute here.
 
 ## Projects
 
-A project is a charter with `kind: project` and a `repos:` line (`repos: [octo-org/widgets]`); its manager is the session named by its key, started from its sidebar row. Only when Ian asks, add a workstream to a project or take it out; membership is the workstream's own `project:` line:
-```bash
-uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" join <KEY> <PROJECT>
-uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" leave <KEY>
-```
+A project is a charter with `kind: project` and a `repos:` line (`repos: [octo-org/widgets]`); its manager is the session named by its key, started from its sidebar row. Only when Ian asks, add a workstream to a project or take it out; membership is the workstream's own `project:` line. Use the board tool's `join` action with the key and the project, or `leave` with the key.
 
 ## Snooze and unsnooze
 
-Only when Ian asks to snooze or unsnooze a workstream; the board never snoozes on its own judgment. The length is minutes, hours or days, such as `90m`, `3h` or `1d`. A permission or a question from any session of the workstream ends it:
-```bash
-uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" snooze <KEY> <length>
-uv run --no-project "${CLAUDE_PLUGIN_ROOT}/hooks/board.py" unsnooze <KEY>
-```
+Only when Ian asks to snooze or unsnooze a workstream; the board never snoozes on its own judgment. The length is minutes, hours or days, such as `90m`, `3h` or `1d`. A permission or a question from any session of the workstream ends it. Use the board tool's `snooze` action with the key and the length, or `unsnooze` with the key.
 
 ## What now (interpretation)
 
-Below the block, under the heading **What now**, the decisions the board raises, ranked by spec §8 (Guidance). This part is your judgment, not the board: you may read the `last_message` fields of the `board/*.json` records and the charters to form it.
+Below the block, under the heading **What now**, the decisions the board raises, ranked by spec §8 (Guidance). This part is your judgment, not the board: to form it you may read each live session's last reply with the board tool's `last` action, and any workstream's charter with its `charter` action.
 
 Argue each decision before you recommend it — what to answer, what to pick up, what to stop:
 ```markdown
@@ -102,12 +90,12 @@ Argue each decision before you recommend it — what to answer, what to pick up,
 ```
 Keep each side to one or two lines, and give each side its best case, not a straw man. A decision with no real case against is a one-line item with no For/Against.
 
-A row that reads `all done` raises one decision: close the workstream. Propose `status: done` on its charter and set it only on Ian's yes; the board never closes a workstream on its own, as the sweep never archives one.
+A row that reads `all done` raises one decision: close the workstream. Propose `status: done` on its charter and set it, with the board tool's `status` action, only on Ian's yes; the board never closes a workstream on its own, as the sweep never archives one.
 
 Then ask Ian about the first decision only, and stop.
 
 ## `/workstreams:board --deep`
-Add: `gh search prs --author @me --state open --json number,title,reviewDecision,statusCheckRollup`; Jira, through an MCP server when one is configured, for tickets in each charter's `refs.tickets`. Re-rank.
+Add: `gh search prs --author @me --state open --json number,title,reviewDecision,statusCheckRollup`; Jira, through an MCP server when one is configured, for tickets in each charter's `refs.tickets`, read with the board tool's `charter` action. Re-rank.
 
 ## `/workstreams:board <WORKSTREAM>`
 Show what spec §8 lists for one workstream, with the actions below.
@@ -122,8 +110,8 @@ The plugin's mod appends the operating rules, the charter and the record's newes
 A workstream whose latest session is still in `claude agents --json --all` is reopened from its sidebar row, not dispatched again: a click revives a retired session, and replacing it is Ian's choice, made with a cold row's `↻` (spec §4). `claude rm` on that session makes the row's next click start fresh.
 
 ## Stop / sweep
-`claude stop <job>` and `claude rm <job>` take the short job id: the registry's `jobId`, or else the row's 8-character session id. A full session UUID fails with "no job matching". `claude stop` ends a running session, and for a background session waiting on input it is the only thing that ends it cleanly. `claude rm` clears a stale `blocked` entry from `claude agents`; the plugin prunes only its own board. Stop what should be gone; never wait on reaping. Delete `board/*.json` with `state: ended` and `updated_at` older than 7 days, and any record whose pid has no registry file and whose `updated_at` is older than 1 day.
+`claude stop <job>` and `claude rm <job>` take the short job id: the registry's `jobId`, or else the row's 8-character session id. A full session UUID fails with "no job matching". `claude stop` ends a running session, and for a background session waiting on input it is the only thing that ends it cleanly. `claude rm` clears a stale `blocked` entry from `claude agents`; the plugin prunes only its own board. Stop what should be gone; never wait on reaping. Then call the board tool's `sweep` action, which prunes the board's records of sessions that ended long ago.
 
-The sweep offers to archive the stale set and never archives on its own. Show the keys on the render's stale line with each charter's `focus` line and ask; only on a yes set `status: archived` on the records named, and only on those — Ian keeps the ones he intends to come back to. An archived workstream leaves the board altogether; a stale one is still on it, one word wide.
+The sweep offers to archive the stale set and never archives on its own. Show the keys on the render's stale line with each charter's `focus` line, read with the `charter` action, and ask; only on a yes set `status: archived` with the `status` action on the workstreams named, and only on those — Ian keeps the ones he intends to come back to. An archived workstream leaves the board altogether; a stale one is still on it, one word wide.
 
-The sweep also migrates project memory: for every `memory/project-*.md` or `memory/project_*.md`, add `workstream:`, `purpose:`, `focus:`, `status:` and `goals:` frontmatter from its content, move it to `workstreams/<KEY>.md` (merge into an existing record if the key already has one), and delete its line from `MEMORY.md`. Take the goals from the file's checklist if it carries one; otherwise draft them from the outcomes it says are still open, with finished ones as `[x]`. Report each move in one line.
+The sweep also migrates project memory: for every `memory/project-*.md` or `memory/project_*.md`, add `workstream:`, `purpose:`, `focus:`, `status:` and `goals:` frontmatter from its content, pass the result to the board tool's `create` action with its key (for a key that already has a charter, `create` adds the rows to its record), then delete the memory file and its line from `MEMORY.md`. Take the goals from the file's checklist if it carries one; otherwise draft them from the outcomes it says are still open, with finished ones as `[x]`. Report each move in one line.

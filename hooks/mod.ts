@@ -3,21 +3,23 @@ import { issueLinks } from './jira-links.ts'
 import { sessionLinks } from './session-links.tsx'
 
 // A bound session's charter, as a user row of its conversation; the charter tool, its one way to write that charter; the worker tool,
-// its one way to start and close a worker session; a worker's brief; its goals kept in step with its task list; and every session's board record.
+// its one way to start and close a worker session; a worker's brief; its goals kept in step with its task list; every session's board record;
+// and the board tool, every session's one way to read or change the board, a charter or a project's state.
 // board.py builds the text, makes the writes and keeps the record's state machine; this module decides when each runs and forwards the events the record moves on.
 // Every $-taking helper is a top-level function: the validator lets $ into no other.
 
 const HEAD = '# Workstream charter ('
 const TOOL = 'mcp__workstreams__charter'
 const WORKER_TOOL = 'mcp__workstreams__worker'
+const BOARD_TOOL = 'mcp__workstreams__board'
 
 // What the model reads to learn the tool: BOUND_RULES in board.py say when to write, this says how.
 const CHARTER: ToolSpec = {
   name: 'charter',
   // One line per paragraph and per field: a source line wrapped inside one would reach the model as a break mid-sentence.
   description: [
-    'Writes the charter of your workstream. The charter is the file named in the header of the charter row in your conversation. ' +
-      'Use this tool for every change to the charter. Do not edit the charter file yourself.',
+    'Writes the charter of your workstream, the one shown in the charter row of your conversation. ' +
+      'Use this tool for every change to the charter. Change it no other way.',
     '',
     'Give one or more of the fields below. One call can carry several fields. The tool applies them in the order below. ' +
       'The result has one line for each change, then the number of open goals. If the tool refuses a call, the error says why.',
@@ -74,6 +76,45 @@ const WORKER: ToolSpec = {
   },
 }
 
+// What the skills ask of the board; board.py act checks each action's fields. Any session may use it, a sub-agent too.
+const BOARD: ToolSpec = {
+  name: 'board',
+  description: [
+    'Reads and changes the workstream board: the sessions, the workstreams\' charters and each project\'s state. ' +
+      'Give an action and the fields that it needs. If the tool refuses a call, the error says why.',
+    '',
+    '- render: The board, as text, in its groups.',
+    '- last: Each live session, one line each: its name, short id, state and last reply.',
+    '- charter (key): The charter of the workstream, its frontmatter and its record.',
+    '- archive (key): The record rows that rolled out of the charter.',
+    '- join (key, project): Adds the workstream to the project. leave (key): Takes it out of its project.',
+    '- snooze (key, length): Puts the workstream aside for a length such as 90m, 3h or 1d. unsnooze (key): Ends the snooze.',
+    '- status (key, status): Sets the status of the workstream to active, done or archived.',
+    '- create (key, text): Creates a charter from text: frontmatter whose workstream: line is the key, then the record. ' +
+      'If the key already has a charter, the tool adds the record of text to the end of its record.',
+    '- sweep: Removes the board\'s records of sessions that ended long ago.',
+    '- quota: The 5h and 7d quota, the 5h reset time and the age of the reading.',
+    '- needs (project, items): Replaces the Needs-Ian list of the project with items.',
+    '- pr (project, pr): Adds a pull request, as owner/repo#n or its URL, to what the watch of the project reads.',
+    '- restart (key): Stops the live session of the workstream and starts a new one from its charter. It refuses a session that works or asks Ian.',
+  ].join('\n'),
+  inputSchema: {
+    type: 'object',
+    properties: {
+      action: { type: 'string', enum: ['render', 'last', 'charter', 'archive', 'join', 'leave', 'snooze', 'unsnooze', 'status', 'create', 'sweep', 'quota', 'needs', 'pr', 'restart'], description: 'What to do.' },
+      key: { type: 'string', description: 'The key of a workstream or a project.' },
+      project: { type: 'string', description: 'The key of a project.' },
+      length: { type: 'string', description: 'How long to snooze: 90m, 3h or 1d.' },
+      status: { type: 'string', enum: ['active', 'done', 'archived'], description: 'The new status.' },
+      text: { type: 'string', description: 'A whole charter: frontmatter, then the record.' },
+      items: { type: 'array', items: { type: 'string' }, description: 'The Needs-Ian list, one text each.' },
+      pr: { type: 'string', description: 'A pull request, as owner/repo#n or its URL.' },
+    },
+    required: ['action'],
+    additionalProperties: false,
+  },
+}
+
 // worker: a worker of a charter's key, which is briefed and given no charter tool.
 type Charter = { registry?: string; name?: string | null; key?: string; text?: string; worker?: boolean }
 
@@ -88,7 +129,7 @@ type Board =
 
 // One board.py run, `board.py <cmd> <session id> [...args]`, its stdin built from the session's cwd as it starts; done hands what it
 // printed, or why it failed, to a caller that waits for it. `what` leads its debug line when it fails.
-type Job = { cmd: 'event' | 'write' | 'worker' | 'mirror' | 'tick'; args?: string[]; stdin?: (cwd: string) => string; sid?: string; timeoutMs: number; what: string; done: (out: Out) => void }
+type Job = { cmd: 'event' | 'write' | 'worker' | 'act' | 'mirror' | 'tick'; args?: string[]; stdin?: (cwd: string) => string; sid?: string; timeoutMs: number; what: string; done: (out: Out) => void }
 type Out = { stdout: string } | { failed: string }
 
 // The registry file and name the last board.py read reported, and what is owed at the next prompt or main-loop model request.
@@ -135,9 +176,9 @@ async function inject($: EngineInterface, st: State, mode: 'full' | 'refresh'): 
     if (run.exitCode !== 0) throw exited(run)
     const out = JSON.parse(run.stdout) as Charter
     if (out.registry) Object.assign(st, { registry: out.registry, name: out.name ?? null })
+    if (!out.worker) await offer($, out.text ? [CHARTER, WORKER, BOARD] : [BOARD])
     if (!out.text) return
     key = out.key
-    if (!out.worker) await offer($)
     const kept = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: out.text }] } })
     if (kept.deny !== undefined) throw new Error(`append refused: ${kept.deny}`)
   } catch (err) {
@@ -145,10 +186,10 @@ async function inject($: EngineInterface, st: State, mode: 'full' | 'refresh'): 
   }
 }
 
-// The charter and worker tools, for a session board.py has just found bound. Registering one again replaces it with itself, so every
-// bound read registers them, a /clear's or a /rename's included; an unbound session, or a worker, never has them.
-async function offer($: EngineInterface): Promise<void> {
-  for (const spec of [CHARTER, WORKER]) {
+// The charter and worker tools, for a session board.py has just found bound, and the board tool, for any session but a worker. Registering
+// one again replaces it with itself, so every read registers them, a /clear's or a /rename's included; an unbound session has only the board.
+async function offer($: EngineInterface, specs: ToolSpec[]): Promise<void> {
+  for (const spec of specs) {
     try {
       await $.tool.register(spec)
     } catch (err) {
@@ -414,6 +455,13 @@ export const register: Register = (on, options) => {
     const fields = { task: e.task, prompt: e.prompt, close: e.close }
     return answer(await queue($, st, { cmd: 'worker', stdin: () => JSON.stringify(fields), timeoutMs: 50_000, what: 'worker not started' }),
       { failed: 'the worker was not started', json: 'the worker launch answered no JSON' })
+  })
+
+  // The board tool, answered the same way. A restart stops a session and starts one, as a worker launch does.
+  on('tool.call', { tool: BOARD_TOOL }, async ($, e) => {
+    const fields = { action: e.action, key: e.key, project: e.project, length: e.length, status: e.status, text: e.text, items: e.items, pr: e.pr }
+    return answer(await queue($, st, { cmd: 'act', stdin: () => JSON.stringify(fields), timeoutMs: 50_000, what: `board ${e.action} not done` }),
+      { failed: `the board ${e.action} was not done`, json: 'the board answered no JSON' })
   })
 
   // A goal task's status onto its goal once the update has run, queued, so two updates in parallel tick one after the other.

@@ -215,11 +215,11 @@ class BoardTest(unittest.TestCase):
         self.assertEqual({k: out[k] for k in ("key", "path", "name", "registry")},
                          {"key": "PAYMENTS_API", "path": path, "name": "PAYMENTS_API", "registry": str(Path(self.home) / ".claude" / "sessions" / "4242.json")})
         fm = re.match(r"---\n(.*?)\n---\n", self.charter_path().read_text(), re.S).group(1).replace('  - "[x] Ship the renderer"\n', "").replace("goals:\n", "goals:\n# 1 done goals omitted\n")
-        self.assertTrue(text.startswith(f"# Workstream charter ({path})\n\n# Operating rules\n"), text[:200])
+        self.assertTrue(text.startswith("# Workstream charter (PAYMENTS_API)\n\n# Operating rules\n"), text[:200])
         self.assertLess(text.index("# Operating rules"), text.index(f"\n---\n{fm}\n---\n"))   # the frontmatter whole, after the rules
         self.assertTrue(text.endswith("\n\n# Record\nHandoff: tests green, push pending."), text[-200:])
         self.assertIn("Every substantive turn, add a record entry and set the focus (plan progress, in flight, next) with the mcp__workstreams__charter tool: "
-                      "load it with ToolSearch first, and never edit the charter file.", text)
+                      "load it with ToolSearch first, and change the charter no other way.", text)
         self.assertIn("When new work appears, add it as a goal with the tool. Ask before any push.", text)
         self.assertIn("The workstream is private to this machine: never mention it, its charter, goals, record or block in anything that leaves the machine", text)
         self.assertIn("When a sub-agent writes any of these for you, tell it the same.", text)
@@ -236,11 +236,21 @@ class BoardTest(unittest.TestCase):
         fm = re.match(r"---\n(.*?)\n---\n", p.read_text(), re.S).group(1).replace('  - "[x] Ship the renderer"\n', "").replace("goals:\n", "goals:\n# 1 done goals omitted\n")
         self.assertIn("\n---\n" + fm + "\n---\n", text)
         head, kept = text.split("\n\n# Record\n")[1].split("\n", 1)
-        self.assertEqual(head, f"(earlier record omitted: read {p})")
+        self.assertEqual(head, "(earlier record omitted: the charter action of the mcp__workstreams__board tool reads it whole)")
         self.assertTrue(body.endswith("\n" + kept)); self.assertTrue(kept.startswith("line "))
         self.assertLessEqual(len(kept), 30_000); self.assertGreater(len(kept), 30_000 - 100)
         p.write_text(p.read_text().replace("\n".join(lines), "\n".join(lines[-100:])))   # under budget: whole, no omission line
         self.assertTrue(self.charter_of()["text"].endswith("\n\n# Record\n" + "\n".join(lines[-100:])))
+
+    def test_the_charter_a_session_reads_names_no_file(self):
+        # Workstream state is reached through the tools: the text names no path, the archive's pointer included, cut off or whole.
+        self.write_charter(extra=self.GOALS); p = self.charter_path()
+        p.write_text(p.read_text().replace("Handoff:", "Earlier rows: PAYMENTS_API/record-archive.md\n\nHandoff:"))
+        whole = self.charter_of()["text"]
+        self.assertIn("\n# Record\nEarlier rows are archived: the archive action of the mcp__workstreams__board tool reads them.\n", whole)
+        p.write_text(p.read_text().replace("Handoff:", "x" * 40_000 + "\nHandoff:"))
+        for text in (whole, self.charter_of()["text"], self.charter_of("s1", "--refresh")["text"]):
+            self.assertFalse([w for w in (self.home, "record-archive", ".md", "/") if w in text], text[:300])
 
     def test_a_refresh_carries_no_record(self):
         self.write_charter(extra=self.GOALS)
@@ -2819,6 +2829,85 @@ class BoardTest(unittest.TestCase):
         root = HOOK.parents[1]
         self.assertNotIn("hooks", json.loads((root / ".claude-plugin" / "plugin.json").read_text()))
         self.assertEqual(json.loads((root / "hooks" / "hooks.json").read_text()), {"modules": ["./mod.ts"]})
+
+    # --- the board tool: `board.py act`, every session's one way to read or change workstream state ---
+
+    def act(self, **req):
+        """`board.py act <sid>` as the mod runs it, the fields on stdin: what it printed, on exit 0 whether it did the action or refused it."""
+        p = subprocess.run([sys.executable, str(HOOK), "act", "s1"], input=json.dumps(req), capture_output=True, text=True, env=self.env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)
+
+    def test_the_board_tool_refuses_an_unknown_action_or_a_missing_field(self):
+        self.assertIn("action must be one of render, last,", self.act(action="nope")["error"])
+        self.assertEqual(self.act(action="join", key="A"), {"error": "the join action needs project"})
+        self.assertEqual(self.act(action="snooze", key=" ", length=3), {"error": "the snooze action needs key and length"})
+        self.assertEqual(self.act(action="needs", project="NOPE", items=[]), {"error": "give a project's key: no charter has kind: project"})
+
+    def test_the_board_tool_renders_the_board_and_each_live_sessions_last_reply(self):
+        self.write_charter(); me = self.me()
+        self.put("s-pay-full", "PAYMENTS_API", me, state="waiting", waiting_for="replied", last_message="Pushed\nthe fix.")
+        self.put("s-gone", "GONE", me, state="ended", last_message="Bye.")
+        self.assertEqual(self.act(action="render"), {"ok": True, "summary": self.render("--no-color").rstrip("\n")})
+        self.assertEqual(self.act(action="last"), {"ok": True, "summary": "PAYMENTS_API s-pay-fu · waiting · replied: Pushed the fix."})
+        (self.board / "s-pay-full.json").unlink()
+        self.assertEqual(self.act(action="last")["summary"], "no live session")
+
+    def test_the_board_tool_reads_a_charter_and_its_archive_with_no_file_named(self):
+        self.write_charter(); p = self.charter_path(); ptr = "Earlier rows: PAYMENTS_API/record-archive.md"
+        p.write_text(p.read_text().replace("Handoff:", ptr + "\n\nHandoff:"))
+        out = self.act(action="charter", key="PAYMENTS_API")["summary"]
+        self.assertTrue(out.startswith("---\nname: project-payments\nworkstream: PAYMENTS_API\n"), out)
+        self.assertTrue(out.endswith("---\nEarlier rows are archived: the archive action of the mcp__workstreams__board tool reads them.\n\nHandoff: tests green, push pending."), out)
+        self.assertEqual(self.act(action="archive", key="PAYMENTS_API"), {"ok": True, "summary": "PAYMENTS_API has no archived rows"})
+        a = p.parent / "PAYMENTS_API" / "record-archive.md"; a.parent.mkdir(); a.write_text("- **10-01** Old.\n")
+        self.assertEqual(self.act(action="archive", key="PAYMENTS_API"), {"ok": True, "summary": "- **10-01** Old."})
+        self.assertEqual(self.act(action="charter", key="NOPE"), {"error": "no charter for NOPE"})
+
+    def test_the_board_tool_joins_snoozes_and_sets_status_by_the_same_writes_as_the_commands(self):
+        self.project(); self.write_charter("A"); p = self.charter_path("A")
+        self.assertEqual(self.act(action="join", key="A", project="SHOP"), {"ok": True, "summary": "A joined SHOP"})
+        self.assertIn("\nproject: SHOP\n", p.read_text())
+        self.assertEqual(self.act(action="leave", key="A"), {"ok": True, "summary": "A left its project"})
+        self.assertTrue(self.act(action="snooze", key="A", length="3h")["summary"].startswith("A snoozed until "))
+        self.assertIn("\nsnoozed_until: ", p.read_text())
+        self.assertEqual(self.act(action="snooze", key="A", length="soon"), {"error": "give a length such as 90m, 3h or 1d"})
+        self.assertEqual(self.act(action="unsnooze", key="A"), {"ok": True, "summary": "A unsnoozed"})
+        self.assertEqual(self.act(action="status", key="A", status="archived"), {"ok": True, "summary": "A: status archived"})
+        self.assertIn("\nstatus: archived\n", p.read_text()); self.assertNotIn("status: active", p.read_text())
+        self.assertEqual(self.act(action="status", key="A", status="gone"), {"error": "status must be active, done or archived"})
+        self.assertEqual(self.act(action="status", key="NOPE", status="done"), {"error": "no charter for NOPE"})
+
+    def test_the_board_tool_creates_a_charter_or_adds_its_rows_to_the_one_the_key_has(self):
+        text = "---\nworkstream: NEW_ONE\npurpose: P.\nstatus: active\n---\n- **10-01** Begun.\n"
+        self.assertEqual(self.act(action="create", key="NEW_ONE", text=text), {"ok": True, "summary": "NEW_ONE: charter created"})
+        self.assertEqual(self.charter_path("NEW_ONE").read_text(), text)
+        self.assertEqual(self.act(action="create", key="NEW_ONE", text="---\nworkstream: NEW_ONE\n---\n- **10-02** More.\n"),
+                         {"ok": True, "summary": "NEW_ONE: rows added to its record"})
+        self.assertEqual(self.charter_path("NEW_ONE").read_text(), text + "- **10-02** More.\n")
+        self.assertIn("workstream: line is OTHER", self.act(action="create", key="OTHER", text=text)["error"])
+        self.assertIn("is not a key", self.act(action="create", key="a/b", text="---\nworkstream: a/b\n---\n")["error"])
+
+    def test_the_board_tool_sweep_prunes_old_ended_records_and_old_records_of_dead_pids(self):
+        me, old = self.me(), lambda h: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - h * 3600))
+        for sid, kw in (("ended-old", {"state": "ended", "updated_at": old(8 * 24)}), ("ended-new", {"pid": me, "state": "ended", "updated_at": old(2 * 24)}),
+                        ("dead-old", {"pid": 999_999, "updated_at": old(25)}), ("dead-new", {"pid": 999_999, "updated_at": old(2)}),
+                        ("live-old", {"pid": me, "updated_at": old(48)})):
+            self.put(sid, "W", **kw)
+        (self.board / "open.json").write_text("{}"); (self.board / "project-SHOP.json").write_text("{}")
+        self.assertEqual(self.act(action="sweep"), {"ok": True, "summary": "2 board records pruned"})
+        self.assertEqual(sorted(p.name for p in self.board.glob("*.json")), ["dead-new.json", "ended-new.json", "live-old.json", "open.json", "project-SHOP.json"])
+
+    def test_the_board_tool_keeps_a_projects_quota_needs_prs_and_restart(self):
+        self.project()
+        self.assertEqual(self.act(action="quota"), {"ok": True, "summary": "no quota reading"})
+        self.assertEqual(self.act(action="needs", project="SHOP", items=["merge PR 12"]), {"ok": True, "summary": "1 items need Ian"})
+        self.assertEqual(self.act(action="pr", project="SHOP", pr="https://github.com/octo-org/gadgets/pull/7"), {"ok": True, "summary": "watching https://github.com/octo-org/gadgets/pull/7"})
+        self.assertEqual(self.act(action="pr", project="SHOP", pr="soon"), {"error": "pr must be owner/repo#n or its URL"})
+        d = json.loads((self.board / "project-SHOP.json").read_text())
+        self.assertEqual((d["needs"], d["prs"]), (["merge PR 12"], ["https://github.com/octo-org/gadgets/pull/7"]))
+        self.assertEqual(self.act(action="needs", project="SHOP", items=[]), {"ok": True, "summary": "0 items need Ian"})
+        self.assertEqual(self.act(action="restart", key="NOPE"), {"error": "NOPE: no live session"})
 
 if __name__ == "__main__":
     unittest.main()
