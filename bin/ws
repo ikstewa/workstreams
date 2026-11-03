@@ -16,7 +16,7 @@ if ! tmux has-session -t ws 2>/dev/null; then
   tmux select-pane -t "$right"
 fi
 
-# The sidebar is the pane running the board, and its directory is the board's project; the right pane is the other one,
+# The sidebar is the pane running the board, and its directory is where the sessions it starts run; the right pane is the other one,
 # whatever a click has respawned it to run.
 panes=$(tmux list-panes -t ws -F '#{pane_id} #{pane_start_command}')
 side=$(printf '%s\n' "$panes" | awk '/render --watch --tree/ { print $1; exit }')
