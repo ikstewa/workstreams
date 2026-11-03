@@ -30,7 +30,9 @@ The `/plugin` command inside Claude Code does the same.
 
 ### Charters
 
-Charters live in `~/.claude/projects/<project>/workstreams/<KEY>.md`. `<project>` is the project directory with every character other than letters, digits and `-` replaced by `-`, so `/Users/me/dev/myproject` becomes `-Users-me-dev-myproject`. A `.worktrees/<name>` suffix is dropped, so a worktree shares its project's charters. The board finds a charter by its `workstream:` line; the file name is a convention.
+Charters live in `~/.claude/plugins/data/workstreams-ikstewa/workstreams/<KEY>.md`, the plugin's data folder, beside the board's records in `board/`. Every session reads and writes this one place, whatever folder it starts in. The board finds a charter by its `workstream:` line; the file name is a convention.
+
+`claude plugin uninstall workstreams@ikstewa` deletes this folder, charters included; pass `--keep-data` to keep it.
 
 A minimal charter:
 
@@ -65,7 +67,7 @@ claude -n PAYMENTS_API
 
 ### Open the board
 
-`bin/ws` creates a tmux session named `ws`: the board's tree sidebar (40 columns) on the left and `claude agents --permission-mode auto` on the right, then attaches to it. Run it from the project directory, since the sidebar's directory selects the project:
+`bin/ws` creates a tmux session named `ws`: the board's tree sidebar (40 columns) on the left and `claude agents --permission-mode auto` on the right, then attaches to it. Run it from the project directory, since the sessions the sidebar starts run in its directory:
 
 ```sh
 /path/to/workstreams/bin/ws

@@ -35,7 +35,7 @@ test('an id in inline code of a sidebar session links, and a click opens it from
   const md = await ui.find({ key: 'session-links' })
   expect(md?.props.text).toBe(`Worker [\`694b33c4\`](${HREF}) is done.`)
   expect(md?.props.pressableLinks).toEqual([HREF])
-  expect(k.read).toEqual(['/home/.claude/projects/-Users-x-dev-my-project/board/tree-rows.json'])
+  expect(k.read).toEqual(['/home/.claude/plugins/data/workstreams-ikstewa/board/tree-rows.json'])
   await ui.press({ key: 'session-links', link: { href: HREF } })
   expect(k.runs).toEqual([{
     argv: ['uv', 'run', '--no-project', expect.stringMatching(/\/hooks\/board\.py$/), 'open-session', SID],

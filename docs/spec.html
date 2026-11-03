@@ -770,13 +770,13 @@
           </p>
           <p>
             <strong>The charter and the record live in one file per workstream</strong>,
-            <code>~/.claude/projects/&lt;slug&gt;/workstreams/&lt;KEY&gt;.md</code>: the charter as frontmatter, the
+            <code>~/.claude/plugins/data/workstreams-ikstewa/workstreams/&lt;KEY&gt;.md</code>: the charter as frontmatter, the
             handoff as the body. Today that content is a <code>project-&lt;slug&gt;.md</code> memory file,
             written by the skill chain at milestones and read by a ticket skill on resume. It moves out of
             <code>memory/</code> on purpose. Anything under <code>memory/</code> is indexed into every session and
             eligible for recall into any of them; a workstream's record is relevant to exactly one session, the one
-            bound to it, plus control. The <code>workstreams/</code> directory is a sibling of <code>memory/</code>
-            and <code>board/</code>, so nothing there is indexed or recalled, and the mod appends it where it belongs.
+            bound to it, plus control. The <code>workstreams/</code> directory sits in the plugin's data folder, outside
+            every <code>memory/</code>, so nothing there is indexed or recalled, and the mod appends it where it belongs.
           </p>
           <p>
             <strong>The memory index shrinks.</strong> <code>MEMORY.md</code> loads into every session, and its Active
@@ -1077,12 +1077,11 @@
           <p>
             The board is a directory of small JSON files, one per session keyed by session id, plus
             <code>control.json</code> and each project manager's <code>project-&lt;KEY&gt;.json</code>, at
-            <code>~/.claude/projects/&lt;project&gt;/board/</code>. Every session in a project
-            and any of its worktrees resolves to that directory: <code>board.py</code>
-            strips the <code>/.worktrees/…</code> suffix from the project path to reach it. It is
-            outside the repository, so a worktree write guard and the repository's <code>.gitignore</code> do not
-            apply; it is per machine and per user, which is the scope of a session; and it is a sibling of
-            <code>memory/</code>, not inside it, so nothing on the board is recalled into context.
+            <code>~/.claude/plugins/data/workstreams-ikstewa/board/</code>, the plugin's data folder. Every session
+            resolves to that directory, whatever folder it starts in, and so do the sidebar and the project manager's
+            watch. It is outside the repository, so a worktree write guard and the repository's <code>.gitignore</code>
+            do not apply; it is per machine and per user, which is the scope of a session; and it is outside every
+            <code>memory/</code>, so nothing on the board is recalled into context.
           </p>
           <p>
             <strong>A record carries</strong> the session id and pid, the workstream from the name, its kind (the active

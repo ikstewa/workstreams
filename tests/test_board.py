@@ -14,7 +14,7 @@ class BoardTest(unittest.TestCase):
         for k in ("TMUX", "TMUX_PANE"): self.env.pop(k, None)   # the suite may run inside Ian's tmux: no test reaches its server
         sessions = Path(self.home) / ".claude" / "sessions"; sessions.mkdir(parents=True)
         (sessions / "4242.json").write_text(json.dumps({"pid": 4242, "sessionId": "s1", "name": "PAYMENTS_API", "cwd": self.proj, "kind": "interactive"}))
-        self.board = Path(self.home) / ".claude" / "projects" / "-Users-x-dev-myproject" / "board"
+        self.data = Path(self.home) / ".claude" / "plugins" / "data" / "workstreams-ikstewa"; self.board = self.data / "board"
 
     def fire(self, event):
         p = subprocess.run([sys.executable, str(HOOK)], input=json.dumps({"session_id": "s1", "cwd": self.proj, **event}), capture_output=True, text=True, env=self.env)
@@ -158,7 +158,7 @@ class BoardTest(unittest.TestCase):
 
     def write_charter(self, name="PAYMENTS_API", created=None, extra=""):
         # created=None omits the field entirely, matching every pre-existing call site's fixture.
-        ws = Path(self.home) / ".claude" / "projects" / "-Users-x-dev-myproject" / "workstreams"; ws.mkdir(parents=True, exist_ok=True)
+        ws = self.data / "workstreams"; ws.mkdir(parents=True, exist_ok=True)
         created_line = f"created: {created}\n" if created is not None else ""
         (ws / f"{name}.md").write_text(f"---\nname: project-payments\nworkstream: {name}\npurpose: Rebuild the API.\nfocus: PROJ-1\nstatus: active\n{created_line}{extra}---\n\nHandoff: tests green, push pending.\n")
 
@@ -274,15 +274,14 @@ class BoardTest(unittest.TestCase):
         self.assertEqual((self.charter_of("s1", env=bare)["key"], self.charter_of("s2", env=bare)["key"]), ("PAYMENTS_API", "OTHER"))
         self.assertEqual(self.charter_of("s2")["key"], "OTHER")   # CLAUDE_PID=4242 names s1
 
-    def test_the_charter_resolves_from_the_cwd_of_a_worktree(self):
-        # The mod may start board.py with no CLAUDE_PROJECT_DIR: the cwd decides, a .worktrees path folded to its root as the settings hook folds it.
-        root = Path(os.path.realpath(self.home)) / "proj"; wt = root / ".worktrees" / "web-app" / "PROJ-1" / "x"; wt.mkdir(parents=True)
-        bare = {k: v for k, v in self.env.items() if k != "CLAUDE_PROJECT_DIR"}
+    def test_state_is_one_place_whatever_folder_a_session_starts_in(self):
+        wt = Path(os.path.realpath(self.home)) / "proj" / ".worktrees" / "web-app" / "PROJ-1" / "x"; wt.mkdir(parents=True)
+        elsewhere = Path(os.path.realpath(self.home)) / "scratch"; elsewhere.mkdir()
         self.event("start", env={**self.env, "CLAUDE_PROJECT_DIR": str(wt)}, where=str(wt))   # as the mod starts it
-        slug = re.sub(r"[^A-Za-z0-9-]", "-", str(root)); proj = Path(self.home) / ".claude" / "projects" / slug
-        self.assertTrue((proj / "board" / "s1.json").exists())   # where the mod keeps this session
-        (proj / "workstreams").mkdir(); (proj / "workstreams" / "PAYMENTS_API.md").write_text("---\nworkstream: PAYMENTS_API\n---\nHandoff.\n")
-        self.assertEqual(self.charter_of(env=bare, cwd=wt)["path"], str(proj / "workstreams" / "PAYMENTS_API.md"))
+        self.assertTrue((self.board / "s1.json").exists())
+        self.write_charter()
+        bare = {k: v for k, v in self.env.items() if k != "CLAUDE_PROJECT_DIR"}   # as the tmux sidebar runs it
+        self.assertEqual(self.charter_of(env=bare, cwd=elsewhere)["path"], str(self.data / "workstreams" / "PAYMENTS_API.md"))
 
     def test_a_prompt_long_after_the_last_turn_passes(self):
         # No prompt is held, however old the last turn: the sidebar's ↻ is where starting fresh is chosen.
@@ -552,7 +551,7 @@ class BoardTest(unittest.TestCase):
     def test_done_charter_stays_while_its_session_is_live(self):
         # done + live session: its own group, labelled done, no focus and no likely: hint. done + nothing live: off the board.
         # archived + live session: Unassigned, as any session without a charter. A block left on any of them changes none of this.
-        me = self.me(); ws = Path(self.home) / ".claude" / "projects" / "-Users-x-dev-myproject" / "workstreams"
+        me = self.me(); ws = self.data / "workstreams"
         for k, st in (("FIN", "done"), ("GONE", "done"), ("ARCH", "archived")):
             self.write_charter(k, extra="blocked: PR #12\n")
             (ws / f"{k}.md").write_text((ws / f"{k}.md").read_text().replace("status: active", f"status: {st}"))
@@ -568,7 +567,7 @@ class BoardTest(unittest.TestCase):
 
     def finished(self, key, **kw):
         """A charter for `key` whose status is done, blocked on PR #12, with a live session built from `kw`."""
-        self.write_charter(key, extra="blocked: PR #12\n"); ws = Path(self.home) / ".claude" / "projects" / "-Users-x-dev-myproject" / "workstreams"
+        self.write_charter(key, extra="blocked: PR #12\n"); ws = self.data / "workstreams"
         (ws / f"{key}.md").write_text((ws / f"{key}.md").read_text().replace("status: active", "status: done"))
         self.live(f"s-{key.lower()}-full", key, self.pid(), **kw)
 
@@ -1767,7 +1766,7 @@ class BoardTest(unittest.TestCase):
     def panel(self, current="OPEN", height=60, goals=PANEL_GOALS, extra="", color=False):
         """The sidebar at 40 columns and `height` rows with `current` open, under OPEN's charter with `extra` frontmatter; returns its rows after the stale line."""
         from unittest import mock
-        ws = Path(self.home) / ".claude" / "projects" / "-Users-x-dev-myproject" / "workstreams"; ws.mkdir(parents=True, exist_ok=True)
+        ws = self.data / "workstreams"; ws.mkdir(parents=True, exist_ok=True)
         (ws / "OPEN.md").write_text("---\nworkstream: OPEN\npurpose: Ship the board, then retire the memory index it replaces.\n"
                                     "focus: 10-02 — the panel is built; next is landing it on master after Ian's go.\n"
                                     f"status: active\n{goals}{extra}---\n\nHandoff.\n")
@@ -1995,7 +1994,7 @@ class BoardTest(unittest.TestCase):
         p = self.task_list(lid) / f"{tid}.json"; p.write_text(json.dumps(json.loads(p.read_text()) | {"status": status}))
 
     def charter_path(self, name="PAYMENTS_API"):
-        return Path(self.home) / ".claude" / "projects" / "-Users-x-dev-myproject" / "workstreams" / f"{name}.md"
+        return self.data / "workstreams" / f"{name}.md"
 
     def sync(self, *argv, env=None):
         """`board.py mirror s1`, or `board.py tick s1 <task-id>` for ("tick", id), as the mod's queue runs them: exit 0, nothing printed."""
@@ -2253,12 +2252,12 @@ class BoardTest(unittest.TestCase):
     # --- workers: launched by the active session, nested under its row, each a stop of its own ---
 
     def worker_home(self):
-        """A project root with a worktree under it, the charter in its board directory, and a fake claude that records where it ran and
+        """A project root with a worktree under it, the charter, and a fake claude that records where it ran and
         what it was given. Returns (root, worktree, env as the mod starts board.py there)."""
         root = Path(os.path.realpath(self.home)) / "proj"; wt = root / ".worktrees" / "web-app" / "X" / "y"; wt.mkdir(parents=True)
-        ws = Path(self.home) / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(root)) / "workstreams"; ws.mkdir(parents=True)
+        ws = self.data / "workstreams"; ws.mkdir(parents=True)
         (ws / "PAYMENTS_API.md").write_text("---\nworkstream: PAYMENTS_API\n---\nHandoff.\n")
-        h = self.home; self.board = ws.parent / "board"   # where board.py reads records from here, for put()
+        h = self.home
         (self.bin / "claude").write_text(f"#!/bin/sh\npwd > {h}/claude.cwd\nprintf '%s\\n' \"$@\" > {h}/claude.argv\nprintf '%s' \"${{CLAUDE_PROJECT_DIR-unset}}\" > {h}/claude.env\n"
                                          f"printf 'backgrounded · \\033[36m9d9d9d9d\\033[39m · x\\n'\n"); (self.bin / "claude").chmod(0o755)
         return root, wt, {**self.env, "CLAUDE_PROJECT_DIR": str(wt)}

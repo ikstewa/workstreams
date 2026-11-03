@@ -39,11 +39,10 @@ export function linkify(text: string, sessions: readonly string[]): { text: stri
 // The session ids of the sidebar's rows, from the click map board.py's watch writes, where board.py's board_dir() keeps it.
 async function onBoard($: EngineInterface): Promise<string[]> {
   try {
-    const project = (await $.session.cwd()).replace(/\/\.worktrees\/.*$/, '').replace(/[^A-Za-z0-9-]/g, '-')
-    const rows = JSON.parse(await $.fs.read(`${await $.env.get('HOME')}/.claude/projects/${project}/board/tree-rows.json`)) as Record<string, { session_id?: string | null; goal?: unknown; pin?: unknown }>
+    const rows = JSON.parse(await $.fs.read(`${await $.env.get('HOME')}/.claude/plugins/data/workstreams-ikstewa/board/tree-rows.json`)) as Record<string, { session_id?: string | null; goal?: unknown; pin?: unknown }>
     return Object.values(rows).flatMap(e => (e.session_id && e.goal === undefined && e.pin === undefined ? [e.session_id] : []))
   } catch {
-    return []   // no sidebar has run for this project
+    return []   // no sidebar has run
   }
 }
 

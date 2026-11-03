@@ -6,11 +6,14 @@ from pathlib import Path
 def project_root():
     return re.sub(r"/\.worktrees/.*$", "", os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
 
-def project_slug():
-    return re.sub(r"[^A-Za-z0-9-]", "-", project_root())
+def data_dir():
+    """Where all workstream state lives, whatever folder a session starts in: the plugin's data folder, as Claude Code names it for an
+    install of workstreams@ikstewa. Built here, not read from CLAUDE_PLUGIN_DATA, which no caller has: the mod's runs inherit Claude Code's
+    own environment, and the tmux sidebar runs outside it."""
+    return Path.home() / ".claude" / "plugins" / "data" / "workstreams-ikstewa"
 
 def board_dir():
-    d = Path.home() / ".claude" / "projects" / project_slug() / "board"
+    d = data_dir() / "board"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -97,7 +100,7 @@ def event(sid, ev):
     if kind == "ask": snooze(rec["workstream"])   # a permission or a question wants Ian: it ends the workstream's snooze for good
 
 def ws_dir():
-    return Path.home() / ".claude" / "projects" / project_slug() / "workstreams"
+    return data_dir() / "workstreams"
 
 FRONT = re.compile(r"---\n(.*?)\n---\n?(.*)", re.S)   # a charter file: frontmatter, then the record
 
