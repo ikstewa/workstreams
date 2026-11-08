@@ -3,6 +3,7 @@
   "description": "Ian's personal plugins",
   "owner": { "name": "Ian Stewart" },
   "plugins": [
-    { "name": "workstreams", "description": "Workstream board, charters, tmux sidebar and active-session dispatch", "source": "./" }
+    { "name": "workstreams", "description": "Workstream board, charters, tmux sidebar and active-session dispatch", "source": "./" },
+    { "name": "orca-lead", "description": "Rules for a lead Claude session that runs one Orca worker per task across repos", "source": { "source": "github", "repo": "ikstewa/workstreams", "ref": "orca" } }
   ]
 }
