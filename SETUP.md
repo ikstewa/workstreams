@@ -18,7 +18,7 @@ Orca has no settings file or settings CLI, so these are set by hand in its UI, p
 
 **General:** workspace directory `~/work/workspaces`; nest workspaces on; ask before deleting on; Open In apps none.
 
-**Integrations:** GitHub through `gh`, a keyring login with the `project` scope. Jira is optional: a scoped Atlassian token with `read:jira-work`, `write:jira-work` and `read:jira-user`, plus the optional board scopes `read:board-scope:jira-software`, `read:board-scope.admin:jira-software` and `read:project:jira`, with the email left empty. Everything else unconnected.
+**Integrations:** GitHub through `gh`, a keyring login with the `project` scope. Jira is optional: a scoped Atlassian token with `read:jira-work`, `write:jira-work` and `read:jira-user`, plus the optional board scopes `read:board-scope:jira-software`, `read:board-scope.admin:jira-software` and `read:project:jira`, with the email left empty. Everything else unconnected. If `gh` in your shells authenticates with a `GITHUB_TOKEN` environment variable, that token needs SSO authorization for any organization that enforces SSO; Orca, started from the Dock, has no such variable and uses the keyring login.
 
 **Mobile:** LAN, never Relay; a real machine name. On a server the phone joins over Tailscale (*server*).
 
@@ -32,7 +32,7 @@ Orca has no settings file or settings CLI, so these are set by hand in its UI, p
 
 **Task Sources:** GitHub and Jira shown; GitLab and Linear hidden.
 
-**Terminal:** system zsh; TUI clipboard writes on; scrollback 25k.
+**Terminal:** system zsh; TUI clipboard writes on; scrollback 25k. Import from Ghostty if you have a Ghostty config (*laptop*).
 
 **Quick Commands:** `Neovim` = `nvim .`, Global.
 

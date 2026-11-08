@@ -4,4 +4,6 @@
 
 1. Run `setup/orca-setup.sh <home-repo-path>`. Set `WORK_DIR` to clone somewhere other than `~/work`.
 2. Set the UI-only settings in [SETUP.md](SETUP.md).
-3. Load this plugin in the lead session: `claude --plugin-dir <this checkout>`.
+3. Install this plugin: `claude plugin marketplace add ikstewa/workstreams`, then `claude plugin install orca-lead@ikstewa`.
+
+To start a lead, open the home repo's main workspace in Orca and run `claude` there.
