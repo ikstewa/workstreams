@@ -1,0 +1,935 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="title" content="Orca project leads on the basecamp mod" />
+    <meta
+      name="description"
+      content="How a project lead and its workers run in Orca once basecamp is a Claude Code mod: one basecamp worktree workspace per lead, workers nested under it in their own repo checkouts, and the orca-lead skill trimmed to Orca mechanics."
+    />
+    <meta name="date" content="2026-11-09" />
+    <meta name="tags" content="developer-tooling,claude-code,architecture" />
+    <meta name="author" content="@ikstewa" />
+    <title>Orca project leads on the basecamp mod</title>
+<style>
+  /* ── Palette — Kollective brand ───────────────────────────────── */
+  :root {
+    --ivory: #f7f6f2;
+    --paper: #ffffff;
+    --slate: #0f1916;
+    --accent: #14a085; /* Kollective primary emerald */
+    --accent-d: #0e7c68; /* darker teal for text on light bg */
+    --accent-soft: #dcf5ee; /* light teal for pill bg, hover, etc. */
+    --sand: #e8dfd0;
+    --moss: #6f8358;
+    --g100: #f1efe8;
+    --g200: #e5e2d9;
+    --g300: #c9c6bd;
+    --g500: #82817a;
+    --g700: #3a3c39;
+
+    --display:
+      ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto,
+      sans-serif;
+    --sans:
+      ui-sans-serif, system-ui, -apple-system, "Inter", "Segoe UI", Roboto,
+      Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+    /* Open Props spacing/size scale */
+    --size-1: 4px;
+    --size-2: 8px;
+    --size-3: 16px;
+    --size-4: 24px;
+    --size-5: 32px;
+    --size-6: 48px;
+    --size-7: 72px;
+    --size-8: 96px;
+    --radius-2: 8px;
+    --radius-3: 14px;
+    --radius-full: 999px;
+
+    --tldr-bg: #ecf0e5;
+    --tldr-bd: var(--moss);
+    --note-bg: #efe9df;
+    --note-bd: var(--g500);
+    --warn-bg: #f4e4da;
+    --warn-bd: var(--accent);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ivory: #1a1816; /* warm dark — Kollective-feel, NOT navy */
+      --paper: #232220;
+      --slate: #ede9e1;
+      --accent: #2ebe9f; /* brighter teal on dark bg */
+      --accent-d: #14a085;
+      --accent-soft: #1a3d33;
+      --sand: #3e332a;
+      --moss: #a0b589;
+      --g100: #262320;
+      --g200: #322e2a;
+      --g300: #4a4540;
+      --g500: #84827a;
+      --g700: #bfbab1;
+      --tldr-bg: #1f2f1f;
+      --note-bg: #2a2520;
+      --warn-bg: #3b281e;
+    }
+  }
+
+  /* ── Base ─────────────────────────────────────────────────────── */
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    margin: 0;
+    background: var(--ivory);
+    color: var(--slate);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 0 var(--size-5) var(--size-8);
+  }
+
+  /* ── Masthead ─────────────────────────────────────────────────── */
+  header.masthead {
+    padding: var(--size-8) 0 var(--size-5);
+    border-bottom: 1.5px solid var(--g300);
+    margin-bottom: var(--size-3);
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--g500);
+    margin: 0 0 var(--size-3);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 28px;
+    height: 1.5px;
+    background: var(--accent);
+  }
+  h1 {
+    font-family: var(--display);
+    font-weight: 500;
+    font-size: clamp(36px, 5vw, 56px);
+    line-height: 1.08;
+    letter-spacing: -0.018em;
+    margin: 0 0 var(--size-2);
+    max-width: 20ch;
+  }
+  h1 em {
+    font-style: italic;
+    color: var(--accent);
+  }
+  .lede {
+    font-size: 18px;
+    color: var(--g700);
+    line-height: 1.55;
+    margin: var(--size-3) 0 0;
+    max-width: 64ch;
+  }
+  .meta {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--g500);
+    margin: var(--size-4) 0 0;
+    display: flex;
+    align-items: center;
+    gap: var(--size-2);
+    flex-wrap: wrap;
+  }
+  .meta .dot {
+    color: var(--g300);
+  }
+
+  /* ── Sections ─────────────────────────────────────────────────── */
+  section {
+    margin-top: var(--size-7);
+    scroll-margin-top: 28px;
+  }
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--size-3);
+    margin-bottom: var(--size-3);
+  }
+  .sec-head .idx {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 600;
+    width: 30px;
+    flex-shrink: 0;
+  }
+  .sec-head h2 {
+    font-family: var(--display);
+    font-weight: 500;
+    font-size: 28px;
+    line-height: 1.15;
+    letter-spacing: -0.012em;
+    margin: 0;
+  }
+  .sec-head h2 em {
+    font-style: italic;
+    color: var(--accent);
+  }
+  section > p,
+  section > ul,
+  section > ol,
+  section > div,
+  section > table,
+  section > pre,
+  section > blockquote {
+    margin-left: 50px;
+  }
+  @media (max-width: 640px) {
+    section > p,
+    section > ul,
+    section > ol,
+    section > div,
+    section > table,
+    section > pre,
+    section > blockquote {
+      margin-left: 0;
+    }
+  }
+  h3 {
+    font-family: var(--display);
+    font-weight: 500;
+    font-size: 21px;
+    letter-spacing: -0.008em;
+    margin: var(--size-5) 0 var(--size-2) 50px;
+  }
+  h4 {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 15px;
+    letter-spacing: 0.01em;
+    margin: var(--size-3) 0 var(--size-2);
+  }
+  @media (max-width: 640px) {
+    h3 {
+      margin-left: 0;
+    }
+  }
+
+  /* ── Body text ────────────────────────────────────────────────── */
+  p {
+    margin: var(--size-2) 0;
+  }
+  p,
+  li {
+    color: var(--g700);
+  }
+  article > * > strong,
+  article p > strong {
+    color: var(--slate);
+  }
+  a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-color: var(--sand);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+  a:hover {
+    text-decoration-color: var(--accent);
+  }
+  blockquote {
+    border-left: 3px solid var(--g300);
+    padding: var(--size-1) var(--size-3);
+    color: var(--g700);
+    margin: var(--size-3) 0;
+    font-style: italic;
+  }
+  ul,
+  ol {
+    padding-left: var(--size-4);
+  }
+  li {
+    margin: var(--size-1) 0;
+  }
+
+  /* ── Tables ───────────────────────────────────────────────────── */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: var(--size-3) 0;
+    font-size: 14.5px;
+  }
+  th,
+  td {
+    border-bottom: 1px solid var(--g200);
+    padding: var(--size-2) var(--size-3);
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--g100);
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--g500);
+    border-bottom: 1.5px solid var(--g300);
+  }
+  tr:last-child td {
+    border-bottom: 0;
+  }
+
+  /* ── Code blocks ──────────────────────────────────────────────── */
+  code {
+    font-family: var(--mono);
+    font-size: 13.5px;
+  }
+  :not(pre) > code {
+    background: var(--g100);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    font-size: 12.5px;
+    color: var(--accent-d);
+  }
+
+  .code-block {
+    margin: var(--size-3) 0;
+  }
+  .code-block .file-label {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--g500);
+    margin-bottom: var(--size-1);
+    letter-spacing: 0.02em;
+  }
+  .code-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: var(--size-3);
+  }
+
+  /* <pre> outer chrome — Prism Tomorrow theme (loaded via CDN below) handles
+     background, foreground, and token colors. We just set margin so it sits
+     in the page rhythm. If Prism fails to load, code degrades to readable
+     plain monospace on the browser default. */
+  pre[class*="language-"] {
+    margin: var(--size-3) 0;
+  }
+
+  /* ── Callouts ─────────────────────────────────────────────────── */
+  .callout {
+    padding: var(--size-3) var(--size-4);
+    border-radius: var(--radius-2);
+    border-left: 3px solid;
+    margin: var(--size-3) 0;
+  }
+  .callout > :first-child {
+    margin-top: 0;
+  }
+  .callout > :last-child {
+    margin-bottom: 0;
+  }
+  .callout .label {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: var(--size-1);
+    display: block;
+  }
+  .callout-tldr {
+    background: var(--tldr-bg);
+    border-color: var(--tldr-bd);
+  }
+  .callout-tldr .label {
+    color: var(--moss);
+  }
+  .callout-note {
+    background: var(--note-bg);
+    border-color: var(--note-bd);
+  }
+  .callout-note .label {
+    color: var(--g500);
+  }
+  .callout-warn {
+    background: var(--warn-bg);
+    border-color: var(--warn-bd);
+  }
+  .callout-warn .label {
+    color: var(--accent);
+  }
+
+  /* ── Pills ────────────────────────────────────────────────────── */
+  .pill {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: var(--radius-full);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    background: var(--g100);
+    color: var(--g700);
+    border: 1px solid var(--g200);
+  }
+  .pill-spec {
+    background: var(--sand);
+    color: var(--accent-d);
+    border-color: var(--sand);
+  }
+  .pill-research {
+    background: #dde2ec;
+    color: #2c4a75;
+    border-color: #dde2ec;
+  }
+  .pill-investigation {
+    background: #d9e4d0;
+    color: #3e5a2a;
+    border-color: #d9e4d0;
+  }
+  .pill-review {
+    background: #e4dced;
+    color: #4f3a6f;
+    border-color: #e4dced;
+  }
+  .pill-plan {
+    background: #ecd7dd;
+    color: #7a2e47;
+    border-color: #ecd7dd;
+  }
+  .pill-report {
+    background: #dee0ec;
+    color: #2d3a6e;
+    border-color: #dee0ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    .pill-spec {
+      background: #3e2a1e;
+      color: #e8c7b2;
+      border-color: #4a3424;
+    }
+    .pill-research {
+      background: #1f2a3e;
+      color: #b2c7e8;
+      border-color: #2a3548;
+    }
+    .pill-investigation {
+      background: #1e3023;
+      color: #b7d49e;
+      border-color: #2a3c2f;
+    }
+    .pill-review {
+      background: #2d2238;
+      color: #c8b2e0;
+      border-color: #382e48;
+    }
+    .pill-plan {
+      background: #3a1f2a;
+      color: #e8b2c7;
+      border-color: #482b36;
+    }
+    .pill-report {
+      background: #20253a;
+      color: #b2bbe0;
+      border-color: #2a3048;
+    }
+  }
+
+  /* ── Split ────────────────────────────────────────────────────── */
+  .split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--size-4);
+    margin: var(--size-3) 0;
+  }
+  @media (max-width: 640px) {
+    .split {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* ── Cards ────────────────────────────────────────────────────── */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: var(--size-3);
+    margin: var(--size-4) 0;
+  }
+  .card {
+    background: var(--paper);
+    border: 1.5px solid var(--g300);
+    border-radius: var(--radius-3);
+    padding: var(--size-4);
+    transition:
+      transform 150ms ease,
+      box-shadow 150ms ease,
+      border-color 150ms ease;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(20, 20, 19, 0.07);
+    border-color: var(--slate);
+  }
+  @media (prefers-color-scheme: dark) {
+    .card:hover {
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    }
+  }
+  .card > :first-child {
+    margin-top: 0;
+  }
+  .card h4 {
+    margin-top: 0;
+    font-family: var(--display);
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: -0.008em;
+  }
+  .card .card-eyebrow {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: var(--size-1);
+  }
+  .card p {
+    font-size: 14px;
+    color: var(--g700);
+    margin: var(--size-2) 0 0;
+  }
+
+  /* ── Steps ────────────────────────────────────────────────────── */
+  .steps {
+    counter-reset: step;
+    list-style: none;
+    padding: 0;
+    margin: var(--size-4) 0 var(--size-4) 50px;
+  }
+  @media (max-width: 640px) {
+    .steps {
+      margin-left: 0;
+    }
+  }
+  .steps > li {
+    position: relative;
+    padding: 0 0 var(--size-4) var(--size-6);
+    counter-increment: step;
+  }
+  .steps > li::before {
+    content: counter(step, decimal-leading-zero);
+    position: absolute;
+    left: 0;
+    top: -2px;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+  }
+  .steps > li::after {
+    content: "";
+    position: absolute;
+    left: 14px;
+    top: var(--size-3);
+    bottom: var(--size-1);
+    width: 1.5px;
+    background: var(--g300);
+  }
+  .steps > li:last-child::after {
+    display: none;
+  }
+  .steps > li > :first-child {
+    margin-top: 0;
+    font-weight: 600;
+    color: var(--slate);
+  }
+</style>
+    <style>
+      /* ── On-this-page nav (sticky TOC, wide viewports only) ──────────── */
+      .toc { display: none; }
+      .toc-h {
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--g500);
+        margin: 0 0 var(--size-3);
+      }
+      .toc ul { list-style: none; margin: 0; padding: 0; }
+      .toc li { margin: 0; }
+      .toc a {
+        display: block;
+        padding: 4px 0 4px var(--size-3);
+        border-left: 2px solid var(--g200);
+        color: var(--g500);
+        text-decoration: none;
+        font-size: 13px;
+        line-height: 1.35;
+        transition: color 120ms ease, border-color 120ms ease;
+      }
+      .toc a:hover { color: var(--slate); border-left-color: var(--g300); }
+      .toc a.active {
+        color: var(--accent-d);
+        border-left-color: var(--accent);
+        font-weight: 600;
+      }
+      .toc .toc-group {
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--g500);
+        margin: var(--size-3) 0 var(--size-1) var(--size-3);
+      }
+      @media (min-width: 1100px) {
+        .wrap {
+          max-width: 1180px;
+          display: grid;
+          grid-template-columns: 196px minmax(0, 1fr);
+          column-gap: var(--size-5);
+          align-items: start;
+        }
+        .toc {
+          display: block;
+          position: sticky;
+          top: var(--size-5);
+          max-height: calc(100vh - var(--size-6));
+          overflow-y: auto;
+          padding: var(--size-3) 0;
+        }
+      }
+      @media print { .toc { display: none; } }
+      /* ── Appendix divider ─────────────────────────────────────────────── */
+      .appendix-divider {
+        margin-top: var(--size-8);
+        padding-top: var(--size-5);
+        border-top: 1.5px solid var(--g300);
+      }
+      .appendix-divider .eyebrow { margin-bottom: 0; }
+      /* ── Verdict cells ────────────────────────────────────────────────── */
+      td.v-rej { font-family: var(--mono); font-size: 12px; color: var(--accent-d); }
+      td.v-ok { font-family: var(--mono); font-size: 12px; color: var(--g500); }
+    </style>
+    <link
+      rel="stylesheet"
+      media="(prefers-color-scheme: light)"
+      href="https://cdn.jsdelivr.net/gh/PrismJS/prism-themes/themes/prism-one-light.css"
+    />
+    <link
+      rel="stylesheet"
+      media="(prefers-color-scheme: dark)"
+      href="https://cdn.jsdelivr.net/gh/PrismJS/prism-themes/themes/prism-one-dark.css"
+    />
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/combine/npm/prismjs@1.29.0/prism.min.js,npm/prismjs@1.29.0/components/prism-javascript.min.js,npm/prismjs@1.29.0/components/prism-typescript.min.js,npm/prismjs@1.29.0/components/prism-python.min.js,npm/prismjs@1.29.0/components/prism-java.min.js,npm/prismjs@1.29.0/components/prism-go.min.js,npm/prismjs@1.29.0/components/prism-bash.min.js,npm/prismjs@1.29.0/components/prism-sql.min.js,npm/prismjs@1.29.0/components/prism-yaml.min.js,npm/prismjs@1.29.0/components/prism-json.min.js,npm/prismjs@1.29.0/components/prism-markup.min.js,npm/prismjs@1.29.0/components/prism-css.min.js"
+    ></script>
+  </head>
+  <body>
+    <div class="wrap">
+      <nav class="toc" aria-label="On this page">
+        <p class="toc-h">On this page</p>
+        <ul>
+          <li><a data-spy href="#goal">Goal</a></li>
+          <li><a data-spy href="#shape">Shape</a></li>
+          <li><a data-spy href="#flow">A project, start to finish</a></li>
+          <li><a data-spy href="#changes">Changes on the orca branch</a></li>
+          <li><a data-spy href="#status">Decided and open</a></li>
+          <li class="toc-group">Appendix</li>
+          <li><a data-spy href="#a-evidence">A · What Orca does</a></li>
+          <li><a data-spy href="#b-rejected">B · Rejected alternatives</a></li>
+        </ul>
+      </nav>
+
+      <article>
+        <header class="masthead">
+          <div class="eyebrow">
+            <span class="pill pill-spec">SPEC</span> · Workstreams · Orca
+          </div>
+          <h1>Orca project leads on the <em>basecamp mod</em></h1>
+          <p class="lede">
+            How one person runs several projects in Orca, each with a lead session and its
+            workers, once basecamp ships as the Claude Code mod described in
+            <a href="https://kollective-services.github.io/basecamp/specs/2026-11-09-basecamp-repo-context-mod.html">the basecamp repo-context spec</a>. It covers where a
+            lead and its workers run, how Orca shows them, and what changes in the orca-lead
+            plugin on the workstreams <code>orca</code> branch. It assumes that spec and does not
+            restate it.
+          </p>
+          <p class="meta">
+            Orca behavior measured on 2026-11-09 in spikes against Orca's CLI and app. orca-lead
+            read from the <code>orca</code> branch at <code>9c4b63a</code>.
+          </p>
+        </header>
+
+        <div class="callout callout-tldr">
+          <span class="label">TL;DR</span>
+          <p>
+            Each project lead runs in its own Orca workspace: a basecamp worktree created for the
+            project. It has basecamp's full setup, and the mod gives it every team repo by absolute
+            path, so it does not need the main checkout. The lead starts one worker per task with
+            <code>worker-start --worktree new-child</code> in a worktree of the target repo's
+            checkout under the mod's <code>workPath</code>. Orca nests each worker under its lead's
+            workspace, so the sidebar shows one group per project. The orca-lead skill drops its
+            "stay in the main checkout" rule and its own clone location, and keeps the Orca
+            mechanics.
+          </p>
+        </div>
+
+        <section id="goal">
+          <div class="sec-head"><span class="idx">01</span><h2>Goal</h2></div>
+          <ul>
+            <li>
+              <strong>One sidebar group per project:</strong> the lead's workspace, with that
+              project's workers nested under it.
+            </li>
+            <li>
+              <strong>Leads keep company-wide context</strong> to research across every repo.
+            </li>
+            <li>
+              <strong>Workers run with full Claude Code capabilities</strong> in the target repo's
+              own checkout, as the basecamp spec makes standard for all repo work.
+            </li>
+          </ul>
+        </section>
+
+        <section id="shape">
+          <div class="sec-head"><span class="idx">02</span><h2>Shape</h2></div>
+          <table>
+            <thead><tr><th></th><th>Lead</th><th>Worker</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Runs in</td>
+                <td>An Orca worktree of basecamp, one per project, on its own branch</td>
+                <td>An Orca worktree of the target repo's checkout at <code>&lt;workPath&gt;/&lt;repo&gt;</code></td>
+              </tr>
+              <tr>
+                <td>Created by</td>
+                <td><code>orca worktree create --repo name:basecamp --name &lt;project&gt; --agent claude --prompt "&lt;charter&gt;"</code></td>
+                <td>The lead, with <code>orca orchestration worker-start --worktree new-child --repo path:&lt;workPath&gt;/&lt;repo&gt; --agent claude</code></td>
+              </tr>
+              <tr>
+                <td>Context</td>
+                <td>Basecamp's tracked settings and plugins, plus the mod's context block: every team repo at <code>&lt;basecamp&gt;/.repos</code></td>
+                <td>The repo's own settings, hooks, plugins and <code>CLAUDE.md</code>, plus the mod's context block</td>
+              </tr>
+              <tr>
+                <td>In the sidebar</td>
+                <td>A workspace under the basecamp project</td>
+                <td>A child of its lead's workspace</td>
+              </tr>
+              <tr>
+                <td>Writes</td>
+                <td>Basecamp docs on its own branch, opened as a basecamp PR when wanted</td>
+                <td>The repo change and its PR</td>
+              </tr>
+            </tbody>
+          </table>
+          <p>
+            A lead's worktree holds only basecamp's tracked files, which used to be the obstacle:
+            it had no clones. Under the mod that no longer matters, because every session reads
+            the clones by absolute path in the main checkout (Appendix B). With a basecamp at
+            <code>~/work/basecamp</code> and the default <code>workPath</code>, repo checkouts land
+            at <code>~/work/&lt;repo&gt;</code> and Orca's workspaces under
+            <code>~/work/workspaces/</code>, matching orca-lead's current layout.
+          </p>
+        </section>
+
+        <section id="flow">
+          <div class="sec-head"><span class="idx">03</span><h2>A project, start to finish</h2></div>
+          <ol class="steps">
+            <li>
+              <strong>Start the lead.</strong> Create a basecamp workspace for the project with
+              its charter as the prompt (§02). It appears under basecamp in the sidebar.
+            </li>
+            <li>
+              <strong>Research.</strong> The lead searches <code>&lt;basecamp&gt;/.repos</code>
+              and reads team and repo <code>CLAUDE.md</code> files, as any session with the mod
+              does.
+            </li>
+            <li>
+              <strong>Prepare the target repo.</strong> If <code>&lt;workPath&gt;/&lt;repo&gt;</code>
+              is missing, the lead clones it with <code>gh repo clone</code>; if Orca does not know
+              it, the lead runs <code>orca repo add --path</code>.
+            </li>
+            <li>
+              <strong>Start a worker per task</strong> with <code>worker-start --worktree
+              new-child</code>. Orca creates the worktree, starts the agent, and nests it under the
+              lead's workspace.
+            </li>
+            <li>
+              <strong>Watch.</strong> Each worker's card shows its PR and checks. A follow-up, such
+              as a review comment, goes to a fresh worker in the same worktree.
+            </li>
+            <li>
+              <strong>Finish.</strong> When a worker's PR merges, remove its workspace with
+              <code>orca worktree rm --delete-branch</code>. When the project ends, merge or drop
+              the lead's basecamp branch and remove the lead's workspace the same way.
+            </li>
+          </ol>
+        </section>
+
+        <section id="changes">
+          <div class="sec-head"><span class="idx">04</span><h2>Changes on the orca branch</h2></div>
+          <table>
+            <thead><tr><th>File</th><th>Change</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><code>skills/lead/SKILL.md</code></td>
+                <td>
+                  Replace "stay in the home repo's main checkout, never an Orca worktree of it" with
+                  "run in the basecamp workspace created for your project". Take the clone location
+                  from the mod's <code>workPath</code> instead of <code>WORK_DIR</code>. In Orca,
+                  <code>worker-start</code> is how the separate repo session starts, in place of the
+                  mod's "give the person the command". Keep the rest: register each clone with
+                  Orca, one worker per task, stop and ask on a worker's trust prompt, a brief that
+                  says what to do when the fix is unnecessary, workers do not start workers,
+                  follow-ups go to a fresh worker in the same worktree, never type into a busy
+                  agent.
+                </td>
+              </tr>
+              <tr>
+                <td><code>setup/orca-setup.sh</code></td>
+                <td>
+                  Take basecamp's path as its argument, register basecamp with Orca, and read the
+                  work folder from the mod's <code>workPath</code>; drop <code>WORK_DIR</code>.
+                  Keep the skill install, the <code>gh</code> protocol, and the printed trust-prompt
+                  and plugin-install steps.
+                </td>
+              </tr>
+              <tr>
+                <td><code>README.md</code></td>
+                <td>Say the plugin requires the basecamp mod, installed and set up first.</td>
+              </tr>
+              <tr>
+                <td><code>SETUP.md</code></td>
+                <td>Unchanged. Orca's workspace directory stays <code>~/work/workspaces</code>.</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="status">
+          <div class="sec-head"><span class="idx">05</span><h2>Decided and open</h2></div>
+          <div class="split">
+            <div>
+              <h3>Decided</h3>
+              <ul>
+                <li>Each project lead gets its own Orca workspace, with its workers nested under it.</li>
+                <li>The work lands on the workstreams <code>orca</code> branch, after the basecamp mod exists.</li>
+              </ul>
+              <h3>Proposed here</h3>
+              <ul>
+                <li>The lead's workspace is a basecamp worktree (§02).</li>
+                <li>Workers run in worktrees of each repo's own checkout under <code>workPath</code>.</li>
+                <li>The sidebar's card nesting is the per-project view; no plugin panel.</li>
+              </ul>
+            </div>
+            <div>
+              <h3>Open</h3>
+              <ul>
+                <li>Whether the old workstreams plugin (its board, project and micro-manage skills) is retired once this works.</li>
+                <li>Whether a lead's basecamp branch is worth keeping for docs, or leads write no docs and the branch is dropped by default.</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <div class="appendix-divider">
+          <div class="eyebrow">Appendix</div>
+        </div>
+
+        <section id="a-evidence">
+          <div class="sec-head"><span class="idx">A</span><h2>What Orca does</h2></div>
+          <p>Measured in spikes on 2026-11-09.</p>
+          <table>
+            <thead><tr><th>Test</th><th>Result</th></tr></thead>
+            <tbody>
+              <tr><td>New workspace in a project backed by a git repo</td><td>Always a new git worktree on a new branch, even when the project was registered or switched to the folder kind: Orca marks a git directory as git again.</td></tr>
+              <tr><td>New workspace in a project backed by a plain folder</td><td>A separate card pointing at the same folder; any number can exist.</td></tr>
+              <tr><td>A worktree in another repo created with a parent workspace</td><td>Recorded as a child and drawn nested under the parent, across repos, in both the Workspaces and Projects sidebar views.</td></tr>
+              <tr><td>Two leads in one workspace, each with its own orchestration Run</td><td>Tasks are filed per Run, but the sidebar nests all workers under the shared workspace: Runs do not group the sidebar.</td></tr>
+              <tr><td>The Tasks view and Agent Dashboard</td><td>Tasks lists GitHub and Jira issues and PRs by repo; neither groups agents by Run or project.</td></tr>
+              <tr><td>orca-lead's first live run</td><td>Each new worker worktree stopped on Claude's folder-trust prompt until the working folder was trusted once; <code>gh</code> needed a keyring login.</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="b-rejected">
+          <div class="sec-head"><span class="idx">B</span><h2>Rejected alternatives</h2></div>
+          <table>
+            <thead><tr><th>Alternative</th><th>Why it was rejected</th></tr></thead>
+            <tbody>
+              <tr><td>Every lead in basecamp's main checkout, each with its own Run</td><td>All workers nest under the one shared workspace, so projects are not separated.</td></tr>
+              <tr><td>Several workspaces on the basecamp checkout itself</td><td>Orca treats a git directory as git, so every new workspace is a worktree.</td></tr>
+              <tr><td>A plain folder project for leads, launching Claude in basecamp from each workspace</td><td>Needs a custom launch command and a placeholder folder. A basecamp worktree is a standard workspace and loads basecamp's setup by itself.</td></tr>
+              <tr><td>A basecamp worktree per lead with the clones linked in</td><td>Needed a link script and hooks. The mod's absolute path makes the clones reachable from any worktree.</td></tr>
+              <tr><td>An Orca plugin panel grouping work by project</td><td>Code to build and maintain; the sidebar's nesting already gives one group per lead.</td></tr>
+            </tbody>
+          </table>
+        </section>
+      </article>
+    </div>
+
+    <script>
+      (function () {
+        var links = [].slice.call(document.querySelectorAll(".toc a[data-spy]"));
+        if (!links.length) return;
+        var byId = {},
+          sections = [];
+        links.forEach(function (a) {
+          var el = document.getElementById(a.getAttribute("href").slice(1));
+          if (el) {
+            byId[el.id] = a;
+            sections.push(el);
+          }
+        });
+        function spy() {
+          var current = sections[0];
+          for (var i = 0; i < sections.length; i++) {
+            if (sections[i].getBoundingClientRect().top <= 120) current = sections[i];
+          }
+          links.forEach(function (a) {
+            a.classList.remove("active");
+          });
+          if (current && byId[current.id]) byId[current.id].classList.add("active");
+        }
+        spy();
+        var ticking = false;
+        window.addEventListener(
+          "scroll",
+          function () {
+            if (!ticking) {
+              ticking = true;
+              window.requestAnimationFrame(function () {
+                spy();
+                ticking = false;
+              });
+            }
+          },
+          { passive: true },
+        );
+        window.addEventListener("resize", spy);
+      })();
+    </script>
+  </body>
+</html>
