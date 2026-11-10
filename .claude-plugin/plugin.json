@@ -1,5 +1,5 @@
 {
   "name": "orca-lead",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Rules for a lead Claude session that runs one Orca worker per task across repos"
 }

@@ -1,9 +1,11 @@
 # orca-lead
 
-`orca-lead` is a Claude Code plugin with setup notes for running coding agents through [Orca](https://github.com/stablyai/orca). A lead Claude session runs in your home repo, a multi-repo checkout opened in Orca as a workspace. It starts one Orca worker per task, each in a worktree of another repo cloned under `~/work`. Orca's `orchestration` and `orca-cli` skills teach the commands; the plugin's `lead` skill adds the rules for where the lead and its workers run.
+`orca-lead` is a Claude Code plugin with setup notes for running coding agents through [Orca](https://github.com/stablyai/orca). Each project gets a lead Claude session in its own Orca workspace of basecamp. The lead starts one Orca worker per task, each in a worktree of another repo cloned under the work folder. Orca's `orchestration` and `orca-cli` skills teach the commands; the plugin's `lead` skill adds the rules for where the lead and its workers run.
 
-1. Run `setup/orca-setup.sh <home-repo-path>`. Set `WORK_DIR` to clone somewhere other than `~/work`.
+It requires the basecamp mod, installed and set up first: the mod gives every session the clones' location and the work folder.
+
+1. Run `setup/orca-setup.sh <basecamp-path>`.
 2. Set the UI-only settings in [SETUP.md](SETUP.md).
 3. Install this plugin: `claude plugin marketplace add ikstewa/workstreams`, then `claude plugin install orca-lead@ikstewa`.
 
-To start a lead, open the home repo's main workspace in Orca and run `claude` there.
+To start a lead, create a basecamp workspace for the project with its charter as the prompt: `orca worktree create --repo path:<basecamp-path> --name <project> --agent claude --prompt "<charter>"`.
